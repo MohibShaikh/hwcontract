@@ -1,0 +1,11 @@
+# Serial/boot-log contract: what the firmware must (and must not) print on boot.
+# Judged with run_serial -> patterns are Python regex.
+contract: boot
+kind: serial
+expect:
+  - "IMU init OK"       # required success line
+  - "boot v\\d+"        # a version banner
+forbid:
+  - "panic"             # crash markers must be absent
+  - "Guru Meditation"   # ESP32 exception handler
+  - "\\bnan\\b"         # NaN sensor reads

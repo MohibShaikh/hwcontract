@@ -1,0 +1,11 @@
+# What "correct" looks like on the wire for a WS2812 / NeoPixel LED.
+# Bits are encoded by how long the data line stays HIGH. Times are nanoseconds.
+# assert.py measures the real pulses and compares them to these rows.
+contract: ws2812
+headroom_pct: 20            # inside [min,max] but within 20% of a rail => "marginal"
+edges:
+  - {name: T0H,   min: 200,   typ: 350,   max: 500}    # '0' bit, high time
+  - {name: T0L,   min: 650,   typ: 800,   max: 950}    # '0' bit, low time
+  - {name: T1H,   min: 550,   typ: 700,   max: 850}    # '1' bit, high time
+  - {name: T1L,   min: 450,   typ: 600,   max: 750}    # '1' bit, low time
+  - {name: RESET, min: 50000, typ: 50000, max: null}   # latch/show; WS2812B clones want >280000

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hwcontract"
+version = "0.1.0"
+description = "MCP server that judges hardware timing/serial behavior against a contract (pass/marginal/fail)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "hwcontract authors" }]
+keywords = ["mcp", "hardware", "firmware", "embedded", "logic-analyzer", "ws2812", "dshot", "sigrok"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Hardware",
+  "Topic :: Software Development :: Embedded Systems",
+]
+dependencies = ["pyyaml>=6"]
+
+[project.optional-dependencies]
+serial = ["pyserial>=3.5"]          # live serial capture (check_serial)
+untrusted = ["google-re2>=1.1"]     # ReDoS-immune regex for untrusted serial contracts
+all = ["pyserial>=3.5", "google-re2>=1.1"]
+
+[project.scripts]
+hwcontract = "hwcontract.server:main"
+
+[tool.setuptools]
+packages = ["hwcontract"]
+
+[tool.setuptools.package-data]
+hwcontract = ["examples/*.yaml", "examples/*.json"]

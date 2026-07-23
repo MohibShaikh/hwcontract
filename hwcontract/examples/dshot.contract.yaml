@@ -1,0 +1,10 @@
+# DShot600: the digital signal a flight controller sends a drone ESC. 16-bit frames,
+# 600 kbit/s, bit period ~1667ns. Bits encoded by high-pulse width (like WS2812).
+# Same timing schema; capture with DShot thresholds (high_split ~937, low_split ~730).
+contract: dshot600
+headroom_pct: 15            # ESCs are less forgiving than LEDs
+edges:
+  - {name: T0H, min: 562,  typ: 625,  max: 688}    # '0' bit high (~37.5% of period)
+  - {name: T1H, min: 1125, typ: 1250, max: 1375}   # '1' bit high (75% of period)
+  - {name: T0L, min: 938,  typ: 1042, max: 1146}   # '0' bit low  (period - T0H)
+  - {name: T1L, min: 292,  typ: 417,  max: 542}    # '1' bit low  (period - T1H)

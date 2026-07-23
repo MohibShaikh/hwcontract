@@ -1,0 +1,7 @@
+[
+  {"name": "T0H",   "value": 340,   "unit": "ns"},
+  {"name": "T0L",   "value": 810,   "unit": "ns"},
+  {"name": "T1H",   "value": 520,   "unit": "ns"},
+  {"name": "T1L",   "value": 470,   "unit": "ns"},
+  {"name": "RESET", "value": 62000, "unit": "ns"}
+]
