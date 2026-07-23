@@ -1,5 +1,5 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MohibShaikh/hwcontract",
   "description": "Judge hardware timing/serial against a contract: pass/marginal/fail (WS2812, DShot, logs)",
   "version": "0.1.1",
