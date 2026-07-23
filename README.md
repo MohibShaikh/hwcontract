@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.MohibShaikh/hwcontract -->
+
 # hwcontract
 
 A zero-dependency **MCP server that judges hardware against a contract**. Coding
