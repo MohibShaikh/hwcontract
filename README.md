@@ -11,6 +11,29 @@ did and returns **pass / marginal / fail** the agent can iterate on.
 `marginal` is the valuable verdict — in-spec but low-headroom, the bug that works on
 your bench and fails on a cold board in the field.
 
+## Demo — a real capture, no hardware needed
+
+`python3 demo/ws2812b_neopixel.py` downloads a **real** 24-LED NeoPixel capture
+(recorded off hardware by the sigrok project, 24 MHz), extracts the data line, and
+judges it against two contracts:
+
+```
+measured on the real WS2812B signal (300000 samples @24MHz):
+  T0H 333 ns   T1H 833 ns   T1L 417 ns   T0L 917 ns   RESET 992250 ns
+
+=== generic WS2812 contract -> FAIL ===
+  T1L   600   417   FAIL   183ns short (typ 600)      # real WS2812B low times are shorter
+  T0L   800   917   marginal
+  T1H   700   833   marginal
+
+=== matching WS2812B contract -> PASS ===
+  (all pass)
+```
+
+Same real signal: it **fails** the generic WS2812 contract (correctly — a WS2812B
+isn't a WS2812) and **passes** the matching WS2812B one. That's the tool doing its
+job: measure the real signal, hold it to a spec, and make contracts chip-specific.
+
 ## How it fits together
 
 ```

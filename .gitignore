@@ -10,3 +10,4 @@ KILLSWITCH
 .pypirc
 .env
 *.token
+*.sr

@@ -1,0 +1,12 @@
+# WS2812B (the common "B" variant) — timing differs from the original WS2812,
+# notably shorter low times. Values from the WS2812B datasheet, ±150ns.
+# The generic ws2812.contract.yaml FAILs a real WS2812B on T1L — that's the point:
+# contracts are chip-specific. Match the contract to your exact part.
+contract: ws2812b
+headroom_pct: 20
+edges:
+  - {name: T0H, min: 250, typ: 400, max: 550}    # '0' bit high
+  - {name: T0L, min: 700, typ: 850, max: 1000}   # '0' bit low
+  - {name: T1H, min: 650, typ: 800, max: 950}    # '1' bit high
+  - {name: T1L, min: 300, typ: 450, max: 600}    # '1' bit low
+  - {name: RESET, min: 50000, typ: 50000, max: null}
