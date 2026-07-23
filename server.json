@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.json",
   "name": "io.github.MohibShaikh/hwcontract",
-  "description": "Judge hardware timing/serial behavior against a contract: pass/marginal/fail for WS2812, DShot, and boot logs.",
+  "description": "Judge hardware timing/serial against a contract: pass/marginal/fail (WS2812, DShot, logs)",
   "version": "0.1.1",
   "repository": {
     "url": "https://github.com/MohibShaikh/hwcontract",
@@ -9,7 +9,7 @@
   },
   "packages": [
     {
-      "registry_type": "pypi",
+      "registryType": "pypi",
       "identifier": "hwcontract",
       "version": "0.1.1",
       "transport": { "type": "stdio" }
