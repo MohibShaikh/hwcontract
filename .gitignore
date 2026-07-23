@@ -5,3 +5,8 @@ dist/
 *.egg-info/
 *.bak
 KILLSWITCH
+
+# local secrets — never commit
+.pypirc
+.env
+*.token
