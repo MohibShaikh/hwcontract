@@ -98,7 +98,6 @@ command = "hwcontract"
 > Speaks MCP 2026-07-28, the stateless revision: per-request `_meta`,
 > `server/discover`, no handshake. Clients that still open with `initialize` get
 > the old shape back. Each request picks its own era, so nothing to configure.
-> Set `HWCONTRACT_ORIGINS` to allow browser origins other than localhost.
 
 ### If the client can't find `hwcontract` (PATH issues)
 
