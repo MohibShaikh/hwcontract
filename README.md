@@ -94,6 +94,11 @@ command = "hwcontract"
 > Transport is **stdio** by default (local, no auth surface). For remote-only
 > clients (e.g. ChatGPT connectors), run `hwcontract --http 8791` and expose it
 > via a tunnel with `HWCONTRACT_TOKEN` set for bearer auth.
+>
+> Speaks MCP 2026-07-28, the stateless revision: per-request `_meta`,
+> `server/discover`, no handshake. Clients that still open with `initialize` get
+> the old shape back. Each request picks its own era, so nothing to configure.
+> Set `HWCONTRACT_ORIGINS` to allow browser origins other than localhost.
 
 ### If the client can't find `hwcontract` (PATH issues)
 
@@ -134,7 +139,7 @@ package under `hwcontract/examples/`.
 - **`judge.py`.** The pure judge for timing and serial. No hardware, no framework, cached.
 - **`sigrok_adapter.py`.** Turns a logic-analyzer capture into pulse-width observations for WS2812 and DShot.
 - **`serial_adapter.py`.** Captures a serial log, or replays a saved one.
-- **`server.py`.** The MCP server, stdio JSON-RPC, stdlib only.
+- **`server.py`.** The MCP server, stdio and HTTP JSON-RPC, stdlib only.
 - **`*.contract.yaml`.** What "correct" looks like. Human-editable, and they double as regression tests.
 
 ## The contract format

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hwcontract"
-version = "0.1.3"
+version = "0.2.0"
 description = "MCP server that judges hardware timing/serial behavior against a contract (pass/marginal/fail)"
 readme = "README.md"
 requires-python = ">=3.9"
