@@ -5,6 +5,9 @@ dist/
 *.egg-info/
 *.bak
 KILLSWITCH
+.venv/
+uv.lock
+.claude/
 
 # local secrets — never commit
 .pypirc
