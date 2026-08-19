@@ -1,0 +1,10 @@
+# DShot150: the slowest DShot ESC protocol. Bit period 6.67us, T1H 5.00us (75%),
+# T0H 2.50us (37.5%). Capture with DShot thresholds scaled to the bit rate:
+# high_split ~4.17us, low_split ~2.92us. Times are nanoseconds.
+contract: dshot150
+headroom_pct: 15
+edges:
+  - {name: T0H, min: 2250, typ: 2500, max: 2750}   # '0' bit high
+  - {name: T1H, min: 4500, typ: 5000, max: 5500}   # '1' bit high
+  - {name: T0L, min: 3750, typ: 4167, max: 4583}   # '0' bit low (period - T0H)
+  - {name: T1L, min: 1500, typ: 1667, max: 1833}   # '1' bit low (period - T1H)

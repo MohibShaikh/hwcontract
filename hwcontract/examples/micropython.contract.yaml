@@ -1,0 +1,13 @@
+# MicroPython: the REPL banner every port prints on (re)boot over UART or USB.
+# "MicroPython v<x.y.z> on <date>; <board> with <chip>" then the help() hint.
+# On ESP ports a crash shows "Guru Meditation Error"; Core dumps look the same.
+# Judged with run_serial -> patterns are Python regex.
+contract: micropython
+kind: serial
+expect:
+  - "MicroPython v\\d"          # version line
+  - "Type \\\"help\\(\\)\\\" for more information"   # the hint after the banner
+  - ">>>"                       # REPL prompt is alive
+forbid:
+  - "Guru Meditation Error"     # ESP32/ESP8266 crash
+  - "FATAL ERROR"

@@ -1,0 +1,20 @@
+# DS18B20 1-Wire: open-drain single-wire protocol with strict slot timing. Reset
+# = master pulls low >=480us (RESET_LOW), releases, device answers PRESENCE after
+# 15-60us for 60-240us. Every bit is a 60-120us slot: a '0' is held low for the
+# whole slot (WRITE0_LOW >= 60us), a '1' is released within 15us (WRITE1_LOW).
+# Reads: master pulses low >=1us then samples within 15us (READ_VALID). Recovery
+# between slots >=1us. Values from the DS18B20 datasheet AC characteristics.
+# Times are nanoseconds.
+# Capture: the single DQ line; edge names below match a 1-Wire adapter's
+# observations. judge with judge_contract.
+contract: ds18b20
+headroom_pct: 15
+edges:
+  - {name: RESET_LOW,    min: 480000,  typ: 480000,  max: 960000}   # reset pulse 480-960us
+  - {name: PRESENCE_HDL, min: 15000,   typ: 30000,   max: 60000}    # 15-60us before presence
+  - {name: PRESENCE_LOW, min: 60000,   typ: 100000,  max: 240000}   # presence pulse 60-240us
+  - {name: WRITE0_LOW,   min: 60000,   typ: 60000,   max: 120000}   # '0' slot low time
+  - {name: WRITE1_LOW,   min: 1000,    typ: 5000,    max: 15000}    # '1' slot low time
+  - {name: READ_VALID,   min: 0,       typ: 5000,    max: 15000}    # master samples within 15us
+  - {name: SLOT,         min: 60000,   typ: 60000,   max: 120000}   # slot duration 60-120us
+  - {name: RECOVERY,     min: 1000,    typ: 1000,    max: null}     # >=1us between slots

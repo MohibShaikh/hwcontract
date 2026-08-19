@@ -12,10 +12,10 @@ from functools import lru_cache
 
 import yaml
 
-try:                       # google-re2: linear-time, ReDoS-immune. `pip install google-re2`
-    import re2 as re       # used automatically when installed -> safe for UNTRUSTED contracts
+try:                       # prefer google-re2 (pip install google-re2): linear-time, ReDoS-immune
+    import re2 as re
 except ImportError:
-    import re              # stdlib fallback; ReDoS-bounded only by the input cap in run_serial
+    import re              # stdlib fallback; the input cap in run_serial bounds ReDoS
 
 
 @lru_cache(maxsize=64)
@@ -53,10 +53,10 @@ def run(contract, observations):
     by_name = {o["name"]: o for o in observations}
     results, ok = [], True
     for edge in contract["edges"]:
-        status, hint = judge(edge, by_name.get(edge["name"]), contract["headroom_pct"])
+        obs = by_name.get(edge["name"])
+        status, hint = judge(edge, obs, contract["headroom_pct"])
         if status in ("FAIL", "MISSING"):
             ok = False
-        obs = by_name.get(edge["name"])
         results.append({"edge": edge["name"], "typ": edge["typ"],
                         "actual": obs["value"] if obs else None,
                         "status": status, "hint": hint})

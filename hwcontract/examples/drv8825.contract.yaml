@@ -1,0 +1,15 @@
+# DRV8825 stepper driver: same STEP/DIR interface as the A4988 but stricter.
+# STEP high and low each >=1.9us (the A4988 only needs 1us), and DIR must be
+# stable 650ns before and after the STEP edge. max STEP frequency 250kHz
+# (4us period). Values from the DRV8825 datasheet (TI).
+# Times are nanoseconds.
+# Capture: STEP and DIR are separate lines; edge names below match a
+# stepper adapter's observations. judge with judge_contract.
+contract: drv8825
+headroom_pct: 20
+edges:
+  - {name: STEP_HIGH, min: 1900, typ: 5000, max: null}   # tWH(STEP) >= 1.9us
+  - {name: STEP_LOW,  min: 1900, typ: 5000, max: null}   # tWL(STEP) >= 1.9us
+  - {name: DIR_SETUP, min: 650,  typ: 2000, max: null}   # tSU(STEP) >= 650ns
+  - {name: DIR_HOLD,  min: 650,  typ: 2000, max: null}   # tH(STEP)  >= 650ns
+  - {name: STEP_PERIOD, min: 4000, typ: 20000, max: null}   # 250kHz max step rate

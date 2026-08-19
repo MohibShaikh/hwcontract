@@ -1,0 +1,21 @@
+# I2C standard mode (100 kHz): the minimum/maximum timing a bus must hold.
+# SCL period 10us at 100kHz -> SCL_LOW >= 4.7us, SCL_HIGH >= 4.0us. Data must be
+# stable (setup) >=250ns before the SCL rising edge and held >=300ns after.
+# START/STOP setup and bus-free time >=4us/4.7us. Rise/fall times are the fast
+# part: >=300ns fall, <=1000ns rise. Values from the I2C-bus spec, F/S-mode
+# characteristics. Times are nanoseconds.
+# Capture: a two-line decode (SCL + SDA). Edge names below match an I2C adapter's
+# observations; judge with judge_contract.
+contract: i2c-standard
+headroom_pct: 15
+edges:
+  - {name: SCL_LOW,   min: 4700,  typ: 5000, max: null}    # tLOW >= 4.7us
+  - {name: SCL_HIGH,  min: 4000,  typ: 5000, max: null}    # tHIGH >= 4.0us
+  - {name: SETUP_DAT, min: 250,   typ: 500,  max: null}    # tSU;DAT >= 250ns
+  - {name: HOLD_DAT,  min: 300,   typ: 500,  max: 3450}    # tHD;DAT 300ns..3.45us
+  - {name: SETUP_STA, min: 4700,  typ: 5000, max: null}    # repeated START setup >= 4.7us
+  - {name: HOLD_STA,  min: 4000,  typ: 5000, max: null}    # START hold >= 4.0us
+  - {name: SETUP_STO, min: 4000,  typ: 5000, max: null}    # STOP setup >= 4.0us
+  - {name: BUS_FREE,  min: 4700,  typ: 5000, max: null}    # STOP->START >= 4.7us
+  - {name: RISE,      min: 0,     typ: 300,  max: 1000}    # tr <= 1000ns
+  - {name: FALL,      min: 0,     typ: 100,  max: 300}     # tf <= 300ns

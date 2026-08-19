@@ -80,7 +80,7 @@ def synth(dt_ns):
     for _ in range(4):
         s += pulse(350, 1) + pulse(800, 0)   # '0' bits
         s += pulse(700, 1) + pulse(600, 0)   # '1' bits
-    return s + pulse(60000, 0)                 # RESET as the LAST run — must still be caught
+    return s + pulse(60000, 0)                 # RESET as the LAST run; must still be caught
 
 
 def demo():

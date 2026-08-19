@@ -1,0 +1,16 @@
+# DHT11 / DHT22 (AM2302) single-wire sensor: host pulls DATA low to wake the
+# sensor (DHT22 ~1-10ms, DHT11 >=18ms), sensor answers 80us low + 80us high,
+# then sends 40 bits. Every bit is 50us low then a high pulse whose width is the
+# value: 26-28us = '0', 70us = '1'. The 50us low is the same for both bits, so
+# only the high time discriminates. Times are nanoseconds.
+# Capture: the single DATA line. Edge names below match a DHT adapter's
+# observations; judge with judge_contract.
+contract: dht22
+headroom_pct: 15
+edges:
+  - {name: START_LOW,     min: 1000000,  typ: 5000000,  max: 20000000}   # host wake pulse, 1-10ms DHT22 / >=18ms DHT11
+  - {name: RESPONSE_LOW,  min: 70000,    typ: 80000,    max: 90000}     # sensor 80us low
+  - {name: RESPONSE_HIGH, min: 70000,    typ: 80000,    max: 90000}     # sensor 80us high
+  - {name: BIT_LOW,       min: 45000,    typ: 50000,    max: 55000}     # bit lead-in low
+  - {name: ZERO_HIGH,     min: 22000,    typ: 27000,    max: 30000}     # '0' = 26-28us high
+  - {name: ONE_HIGH,      min: 65000,    typ: 70000,    max: 75000}     # '1' = 70us high

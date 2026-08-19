@@ -1,0 +1,15 @@
+# Zephyr RTOS: every Zephyr image prints the build banner on boot, followed by
+# kernel/logger lines. With MCUboot you also see "<inf> mcuboot:" log entries
+# before the app starts. The build id is the fast signal that the image actually
+# booted rather than hung in the bootloader.
+# Judged with run_serial -> patterns are Python regex.
+contract: zephyr
+kind: serial
+expect:
+  - "\\*\\*\\* Booting Zephyr OS build"   # banner, e.g. "*** Booting Zephyr OS build v3.7.0"
+  - "mcuboot"                              # MCUboot stage ran (if present)
+forbid:
+  - "FATAL ERROR"
+  - "Aborted at"
+  - "Kernel panic"
+  - "\\bWDT\\b.*reset"                     # watchdog fired during boot

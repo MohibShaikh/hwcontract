@@ -1,0 +1,11 @@
+# WS2812B-Mini (V3 / V5): the small 5050 package clone. FastLED's timing tables
+# give the values a real strip needs: T0H 225ns, T1H 580ns, T0L 1000ns, T1L 645ns,
+# RESET 280us. Tighter than the plain WS2812B, looser than SK6812. Times are ns.
+contract: ws2812b-mini
+headroom_pct: 15
+edges:
+  - {name: T0H,   min: 200,  typ: 225,  max: 250}     # '0' bit, high time
+  - {name: T1H,   min: 550,  typ: 580,  max: 620}     # '1' bit, high time
+  - {name: T0L,   min: 900,  typ: 1000, max: 1100}    # '0' bit, low time
+  - {name: T1L,   min: 620,  typ: 645,  max: 670}     # '1' bit, low time
+  - {name: RESET, min: 280000, typ: 280000, max: null}

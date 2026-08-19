@@ -5,8 +5,8 @@ Offline/replay:  python serial_adapter.py --file boot.log
 Live (needs pyserial): python serial_adapter.py --port /dev/ttyUSB0 --baud 115200 --seconds 3
 Self-check:      python serial_adapter.py --demo
 
-Owns no device config beyond baud - it just reads what the port (or serial-mcp,
-or a saved log) emits. The whole capture window IS the time bound: a pattern seen
+Owns no device config beyond baud. It just reads what the port, serial-mcp, or a
+saved log emits. The whole capture window IS the time bound: a pattern seen
 in an N-second capture was seen within N seconds.
 """
 import sys

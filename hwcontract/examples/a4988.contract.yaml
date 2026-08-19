@@ -1,0 +1,14 @@
+# A4988 stepper driver (STEP/DIR interface): each rising edge of STEP advances
+# the indexer one (micro)step. STEP high and low must each be >=1us, and DIR
+# must be stable 200ns before and 200ns after the STEP edge. Violations drop
+# steps or move the motor the wrong way. Values from the A4988 datasheet.
+# Times are nanoseconds.
+# Capture: STEP and DIR are separate lines; edge names below match a
+# stepper adapter's observations. judge with judge_contract.
+contract: a4988
+headroom_pct: 20
+edges:
+  - {name: STEP_HIGH, min: 1000, typ: 5000, max: null}   # tA: STEP high >= 1us
+  - {name: STEP_LOW,  min: 1000, typ: 5000, max: null}   # tB: STEP low  >= 1us
+  - {name: DIR_SETUP, min: 200,  typ: 1000, max: null}   # tC: DIR setup >= 200ns
+  - {name: DIR_HOLD,  min: 200,  typ: 1000, max: null}   # tD: DIR hold  >= 200ns

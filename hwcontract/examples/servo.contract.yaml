@@ -1,0 +1,14 @@
+# RC hobby servo: position is set by the WIDTH of a pulse repeated every ~20ms.
+# 1.0ms pulse = one end (commonly 0deg), 1.5ms = neutral, 2.0ms = other end
+# (180deg). Only the pulse width matters, not the duty cycle; the frame can be
+# 5-25ms (40-200Hz) and most servos don't care. Driving beyond ~1-2.5ms strips
+# gears. Times are nanoseconds.
+# Capture: this is a repeating high pulse; edge names below match a servo-
+# specific adapter's observations (PULSE width, FRAME period).
+contract: servo
+headroom_pct: 20
+edges:
+  - {name: PULSE_MIN,     min: 900000,   typ: 1000000,  max: 1100000}    # one end
+  - {name: PULSE_NEUTRAL, min: 1400000,  typ: 1500000,  max: 1600000}    # center (90deg)
+  - {name: PULSE_MAX,     min: 1900000,  typ: 2000000,  max: 2100000}    # other end
+  - {name: FRAME,         min: 5000000,  typ: 20000000, max: 25000000}   # pulse repeat period

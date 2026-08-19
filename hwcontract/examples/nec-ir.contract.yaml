@@ -1,0 +1,18 @@
+# NEC IR remote protocol: pulse-distance encoding at a 38kHz carrier. Each mark
+# burst is ~562us (the receiver sees the demodulated envelope, so capture the
+# demodulated signal: HIGH = carrier ON). A frame is a 9ms AGC mark, 4.5ms
+# space, 32 bits (address + inverted address + command + inverted command), then
+# a trailing mark. '0' bit = 562us mark + 562us space; '1' bit = 562us mark +
+# 1.6875ms space. Repeat (key held) = 9ms mark + 2.25ms space + 562us mark.
+# Times are nanoseconds.
+# Capture: the demodulated envelope; edge names below match a NEC adapter's
+# observations. judge with judge_contract.
+contract: nec-ir
+headroom_pct: 20
+edges:
+  - {name: AGC_MARK,   min: 8100000,  typ: 9000000,  max: 9900000}    # leading 9ms burst
+  - {name: AGC_SPACE,  min: 4050000,  typ: 4500000,  max: 4950000}    # 4.5ms gap after AGC
+  - {name: BIT_MARK,   min: 500000,   typ: 562500,   max: 625000}     # mark for either bit
+  - {name: ZERO_SPACE, min: 500000,   typ: 562500,   max: 625000}     # '0' bit space
+  - {name: ONE_SPACE,  min: 1518000,  typ: 1687500,  max: 1856000}    # '1' bit space
+  - {name: REPEAT_GAP, min: 2025000,  typ: 2250000,  max: 2475000}    # repeat: 9ms+2.25ms

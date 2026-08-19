@@ -1,0 +1,10 @@
+# DShot300: DShot protocol at 300 kbit/s. Bit period 3.33us, T1H 2.50us (75%),
+# T0H 1.25us (37.5%). Capture with DShot thresholds: high_split ~2.08us,
+# low_split ~1.46us. Times are nanoseconds.
+contract: dshot300
+headroom_pct: 15
+edges:
+  - {name: T0H, min: 1125, typ: 1250, max: 1375}   # '0' bit high
+  - {name: T1H, min: 2250, typ: 2500, max: 2750}   # '1' bit high
+  - {name: T0L, min: 1875, typ: 2083, max: 2292}   # '0' bit low (period - T0H)
+  - {name: T1L, min: 750,  typ: 833,  max: 917}    # '1' bit low (period - T1H)

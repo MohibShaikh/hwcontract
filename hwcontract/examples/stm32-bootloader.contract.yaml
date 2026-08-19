@@ -1,0 +1,14 @@
+# STM32 custom UART bootloader + app (CubeIDE HAL style): the bootloader prints a
+# banner, validates the app header, then jumps. Two failure modes show up on the
+# console: an invalid app header ("Invalid application") or a hang after "Jumping
+# to application" (usually a missing VTOR relocation or disabled interrupts).
+# Judged with run_serial -> patterns are Python regex.
+contract: stm32-bootloader
+kind: serial
+expect:
+  - "Starting Bootloader|Bootloader v"   # bootloader banner
+  - "Jumping to application|Jumping to app"   # handoff happened
+forbid:
+  - "Invalid application"       # bad stack pointer / reset vector
+  - "Error_Handler"             # HAL init failure trap
+  - "Failed"

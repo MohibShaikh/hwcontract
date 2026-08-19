@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Demo: judge a REAL WS2812B capture — no hardware needed.
+"""Demo: judge a REAL WS2812B capture, no hardware needed.
 
 Downloads a real 24-LED NeoPixel ring capture (recorded off real hardware by the
 sigrok project, 24 MHz), extracts the DATA_IN line, and runs it through hwcontract

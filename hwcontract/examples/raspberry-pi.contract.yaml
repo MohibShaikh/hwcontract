@@ -1,0 +1,17 @@
+# Raspberry Pi / Linux kernel boot over a serial console: the marker lines from
+# the decompressor and the first kernel lines. "Booting Linux on physical CPU"
+# is the ARM-family signature; the [timestamp] lines start at 0.000000. The
+# kernel then mounts root and starts init. If init never prints, the boot died
+# after the kernel started (rootfs or device tree problem).
+# Judged with run_serial -> patterns are Python regex.
+contract: raspberry-pi
+kind: serial
+expect:
+  - "Uncompressing Linux"        # decompressor ran
+  - "done, booting the kernel\\."
+  - "Booting Linux on physical CPU"   # first kernel line
+  - "Run /init"                  # kernel handed off to userspace init
+forbid:
+  - "Kernel panic"
+  - "Oops:"
+  - "request_module: runaway loop"    # module load loop -> probe failure

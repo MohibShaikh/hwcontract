@@ -1,0 +1,13 @@
+# HC-SR04 ultrasonic rangefinder: host pulses TRIG high >=10us, the module fires
+# eight 40kHz cycles and raises ECHO. ECHO stays high for the round-trip flight
+# time: 150us at 2cm up to 25ms at 400cm (38ms timeout if nothing reflects).
+# Distance cm = ECHO_us / 58. Repeat at >=60ms so echoes don't collide.
+# Times are nanoseconds.
+# Capture: TRIG and ECHO are separate lines; edge names below match an
+# HC-SR04 adapter's observations. judge with judge_contract.
+contract: hc-sr04
+headroom_pct: 15
+edges:
+  - {name: TRIG,   min: 10000,    typ: 10000,    max: null}    # >=10us trigger pulse
+  - {name: ECHO,   min: 150000,   typ: 5000000,  max: 25000000}  # 2cm..400cm range
+  - {name: CYCLE,  min: 60000000, typ: 60000000, max: null}    # >=60ms between pings

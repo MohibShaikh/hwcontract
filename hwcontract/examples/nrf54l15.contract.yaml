@@ -1,0 +1,9 @@
+# nRF54L15 DK fingerprint app: what the firmware must (and must not) print.
+# Judged with run_serial -> patterns are Python regex.
+contract: nrf54l15-fingerprint
+kind: serial
+expect:
+  - "VERIFY: place a finger"   # app is alive and waiting
+  - "ACCEPT as user"           # a verification succeeded in the window
+forbid:
+  - "FATAL ERROR"              # crash markers must be absent

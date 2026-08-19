@@ -1,0 +1,17 @@
+# U-Boot: the bootloader stage of an embedded Linux board. SPL prints its banner
+# first ("U-Boot SPL <version>"), then main U-Boot, then hardware init lines
+# (DRAM:, MMC:, Net:), the autoboot countdown, and finally "Starting kernel ...".
+# A healthy boot reaches the kernel; failing that the board sits at the "=>" prompt.
+# Judged with run_serial -> patterns are Python regex.
+contract: u-boot
+kind: serial
+expect:
+  - "U-Boot SPL|U-Boot \\d"     # SPL or main banner
+  - "DRAM:"                     # memory init line
+  - "Hit any key to stop autoboot"   # countdown is live
+  - "Starting kernel \\.\\.\\."          # kernel handoff
+forbid:
+  - "Authentication failed"
+  - "CRC error"
+  - "Skipping authentication"   # unsigned image on a locked board
+  - "\\*\\*"                     # u-boot error banner, e.g. "** Unknown command **"

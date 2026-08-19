@@ -1,6 +1,6 @@
-# WS2812B (the common "B" variant) — timing differs from the original WS2812,
+# WS2812B (the common "B" variant) timing differs from the original WS2812,
 # notably shorter low times. Values from the WS2812B datasheet, ±150ns.
-# The generic ws2812.contract.yaml FAILs a real WS2812B on T1L — that's the point:
+# The generic ws2812.contract.yaml FAILs a real WS2812B on T1L: that's the point.
 # contracts are chip-specific. Match the contract to your exact part.
 contract: ws2812b
 headroom_pct: 20

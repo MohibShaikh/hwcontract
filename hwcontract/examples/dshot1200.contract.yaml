@@ -1,0 +1,10 @@
+# DShot1200: the fastest DShot ESC protocol, 1200 kbit/s. Bit period 0.83us,
+# T1H 0.625us (75%), T0H 0.313us (37.5%). Demands a fast logic analyzer. Capture
+# with DShot thresholds: high_split ~0.52us, low_split ~0.37us. Times are ns.
+contract: dshot1200
+headroom_pct: 15
+edges:
+  - {name: T0H, min: 281, typ: 313, max: 344}    # '0' bit high
+  - {name: T1H, min: 562, typ: 625, max: 688}    # '1' bit high
+  - {name: T0L, min: 469, typ: 521, max: 573}    # '0' bit low (period - T0H)
+  - {name: T1L, min: 187, typ: 208, max: 229}    # '1' bit low (period - T1H)

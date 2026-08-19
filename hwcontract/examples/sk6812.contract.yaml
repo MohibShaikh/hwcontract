@@ -1,0 +1,11 @@
+# SK6812 (the RGBW / warm-white addressable LED): same wire protocol as WS2812,
+# tighter timing. Values from the SK6812 datasheet, all ±150ns. RESET is much
+# shorter than WS2812's 280us: 80us suffices. Times are nanoseconds.
+contract: sk6812
+headroom_pct: 20
+edges:
+  - {name: T0H,   min: 150,   typ: 300,   max: 450}    # '0' bit, high time
+  - {name: T0L,   min: 750,   typ: 900,   max: 1050}   # '0' bit, low time
+  - {name: T1H,   min: 450,   typ: 600,   max: 750}    # '1' bit, high time
+  - {name: T1L,   min: 450,   typ: 600,   max: 750}    # '1' bit, low time
+  - {name: RESET, min: 80000, typ: 80000, max: null}   # 80us latch/show

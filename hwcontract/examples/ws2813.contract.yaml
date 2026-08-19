@@ -1,0 +1,11 @@
+# WS2813 / WS2813B: the "addressable + backup data line" variant of the WS2812
+# family. Bit timing from the WS2813B datasheet: '0' and '1' are told apart by
+# the HIGH pulse, the LOW is identical for both. So the contract only checks the
+# discriminating edges (T0H vs T1H) plus the frame RESET. Times are nanoseconds.
+# The low time is 580-1000ns for both bits; don't make it an edge.
+contract: ws2813
+headroom_pct: 20
+edges:
+  - {name: T0H,   min: 220,   typ: 300,   max: 380}    # '0' bit, high time
+  - {name: T1H,   min: 580,   typ: 800,   max: 1000}   # '1' bit, high time
+  - {name: RESET, min: 280000, typ: 280000, max: null} # >280us resets the strip

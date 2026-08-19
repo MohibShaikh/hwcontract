@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Zero-dependency MCP server exposing the hardware-contract judge.
 
-Speaks MCP over stdio (newline-delimited JSON-RPC 2.0) so any MCP client -
-Claude Code, Codex, opencode - can call it with no pip install:
+Speaks MCP over stdio (newline-delimited JSON-RPC 2.0) so any MCP client,
+Claude Code, Codex, opencode can call it with no pip install:
 
     { "mcpServers": { "hwcontract": {
         "command": "python3", "args": ["/abs/path/server.py"] } } }
@@ -46,7 +46,7 @@ def _guard():
 
 
 def _path(p):
-    """Confine a contract path to ROOT — block traversal / arbitrary file read."""
+    """Confine a contract path to ROOT, blocking traversal and arbitrary file reads."""
     full = os.path.realpath(p if os.path.isabs(p) else os.path.join(ROOT, p))
     if full != ROOT and not full.startswith(ROOT + os.sep):
         raise ValueError(f"path escapes allowed root: {p}")
@@ -54,7 +54,7 @@ def _path(p):
 
 
 def _tok(name, v):
-    """Charset-validate a value handed to sigrok-cli / pyserial (arg-injection defense)."""
+    """Charset-validate a value handed to sigrok-cli / pyserial. Blocks argument injection."""
     if not _TOKEN.match(str(v)):
         raise ValueError(f"invalid {name}: {v!r}")
     return str(v)

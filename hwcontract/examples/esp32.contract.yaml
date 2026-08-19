@@ -1,0 +1,19 @@
+# ESP32 (ESP-IDF): what a healthy serial boot looks like. The ROM banner prints
+# at 115200 on every reset: "ets <date>", then the reset+boot reason, then the
+# flash-boot handoff "entry 0x...". Normal mode is SPI_FAST_FLASH_BOOT; seeing
+# DOWNLOAD_BOOT means the chip is strapped into the flasher and the app never ran.
+# A booted app then prints "I (xxx) boot:" log lines from ESP-IDF.
+# Judged with run_serial -> patterns are Python regex.
+contract: esp32
+kind: serial
+expect:
+  - "ets "                    # ROM banner date line
+  - "rst:0x"                  # reset reason, e.g. rst:0x1 (POWERON_RESET)
+  - "boot:0x"                 # boot mode, e.g. boot:0x13 (SPI_FAST_FLASH_BOOT)
+  - "entry 0x"                # ROM handed control to the bootloader/app
+  - "ESP-IDF"                 # the app's boot banner
+forbid:
+  - "DOWNLOAD_BOOT"           # stuck in UART download mode, not running
+  - "Guru Meditation Error"   # ESP32 panic handler
+  - "abort\\(\\) was called"  # assert/abort in IDF
+  - "FATAL"

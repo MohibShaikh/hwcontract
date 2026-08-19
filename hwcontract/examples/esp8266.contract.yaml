@@ -1,0 +1,16 @@
+# ESP8266: the older ESP's ROM boot log, printed at the unusual 74880 baud.
+# First line "ets Jan 8 2014", then "boot mode:(3,7)" means boot from flash
+# (first field 3) with GPIO pins held high (7). chksum == csum proves the flash
+# image read back correctly. "boot mode:(1,x)" is UART download mode -> app never ran.
+# Judged with run_serial -> patterns are Python regex.
+contract: esp8266
+kind: serial
+expect:
+  - "ets Jan 8 2014"          # ROM banner
+  - "boot mode:\\(3,"         # boot from flash (normal run)
+  - "chksum"                  # checksum of loaded image
+  - "csum"                    # recomputed checksum; equality proves flash read OK
+forbid:
+  - "boot mode:\\(1,"         # UART download mode
+  - "Fatal exception"         # SDK crash
+  - "panic"

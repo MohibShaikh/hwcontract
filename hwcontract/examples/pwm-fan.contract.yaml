@@ -1,0 +1,10 @@
+# 4-wire PWM PC fan (Intel spec): the PWM control pin carries a fixed-frequency
+# square wave at 25kHz target, 21-28kHz acceptable. Duty cycle 0-100% sets fan
+# speed (100% = max); below 20% is undefined by the spec and fan-dependent.
+# Getting the frequency wrong (e.g. 1kHz) makes the fan whine audibly.
+# Times are nanoseconds. Duty is a software ratio (high/period), not an edge.
+# Capture: the PWM pin; judge with judge_contract using PERIOD observations.
+contract: pwm-fan
+headroom_pct: 10
+edges:
+  - {name: PERIOD, min: 35714, typ: 40000, max: 47619}   # 21kHz..28kHz -> 35.7..47.6us
