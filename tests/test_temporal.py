@@ -1,5 +1,6 @@
 """Cross-event temporal assertions, selectors, durations, and the importer."""
 import json
+import os
 
 import pytest
 
@@ -275,6 +276,16 @@ def test_vacuous_forbid_is_visible_in_the_hint():
     assert "never appears in the trace" in results[0]["hint"]
 
 
+def test_wildcard_type_matches_any_event_of_the_source():
+    events = [ev("rising", 9_990, source="spi.mosi"),
+              ev("clock_edge", 10_000, value=1)]
+    results, ok = judge_events(contract([
+        {"name": "mosi-setup", "when": "spi0.clock_edge.value=1",
+         "forbid": "spi.mosi.*", "before": "20ns"}]), events)
+    assert ok is False
+    assert "forbidden spi.mosi.* at 9990ns" in results[0]["hint"]
+
+
 def test_render_events_shows_latency_line():
     text = render_events(judge_events(contract([
         {"name": "cs-then-clk", "when": "gpio.cs.value=0",
@@ -283,6 +294,51 @@ def test_render_events_shows_latency_line():
 
 
 # ---- sigrok jsontrace importer -----------------------------------------------
+
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+
+
+def test_golden_sigrok_fixture_imports():
+    """The B/E annotation shape real sigrok-cli emits (decode.c), not just
+    our own X/i flavor."""
+    from hwcontract.jsontrace import load
+    events = load(os.path.join(FIXTURES, "uart-sigrok-trace.json"))
+    assert [e["type"] for e in events] == ["tx"] * 4
+    assert all(e["source"] == "uart" for e in events)
+    assert events[0]["fields"]["text"] == "0x55 'U'"
+    assert events[0]["start_ns"] == 104166 and events[0]["end_ns"] == 191405
+    assert events[1]["start_ns"] > events[0]["end_ns"]
+
+
+def test_be_pairs_without_cat_args():
+    doc = {"traceEvents": [
+        {"ph": "B", "ts": 1.0, "pid": "spi", "tid": "CS#", "name": "CS asserted"},
+        {"ph": "E", "ts": 2.5, "pid": "spi", "tid": "CS#", "name": "CS asserted"},
+    ]}
+    events = from_traceevents(doc)
+    assert events[0] == {"source": "spi", "type": "CS#", "start_ns": 1000,
+                         "end_ns": 2500,
+                         "fields": {"row": "CS#", "text": "CS asserted"}}
+
+
+def test_unmatched_be_is_an_error():
+    with pytest.raises(EventError):
+        from_traceevents({"traceEvents": [{"ph": "E", "ts": 1.0, "pid": "p", "tid": "t"}]})
+    with pytest.raises(EventError):
+        from_traceevents({"traceEvents": [{"ph": "B", "ts": 1.0, "pid": "p", "tid": "t"}]})
+
+
+def test_nested_be_pairs_stack():
+    doc = {"traceEvents": [
+        {"ph": "B", "ts": 1.0, "pid": "spi", "tid": "transfer"},
+        {"ph": "B", "ts": 2.0, "pid": "spi", "tid": "byte"},
+        {"ph": "E", "ts": 3.0, "pid": "spi", "tid": "byte"},
+        {"ph": "E", "ts": 4.0, "pid": "spi", "tid": "transfer"},
+    ]}
+    events = from_traceevents(doc)
+    assert [(e["type"], e["start_ns"], e["end_ns"]) for e in events] == \
+        [("transfer", 1000, 4000), ("byte", 2000, 3000)]
+
 
 def test_from_traceevents_converts_us_to_ns():
     doc = {"traceEvents": [

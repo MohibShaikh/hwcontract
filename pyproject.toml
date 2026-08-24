@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hwcontract"
 version = "0.4.1"
-description = "MCP server that judges hardware timing/serial behavior against a contract (pass/marginal/fail)"
+description = "Temporal assertions for real hardware traces: judge pulse timing, serial logs and decoded events against YAML contracts (MCP server, pytest plugin, GitHub Action)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -17,6 +17,11 @@ classifiers = [
   "Topic :: System :: Hardware",
   "Topic :: Software Development :: Embedded Systems",
 ]
+
+[project.urls]
+Repository = "https://github.com/MohibShaikh/hwcontract"
+Issues = "https://github.com/MohibShaikh/hwcontract/issues"
+Changelog = "https://github.com/MohibShaikh/hwcontract/releases"
 dependencies = ["pyyaml>=6"]
 
 [project.optional-dependencies]

@@ -1,5 +1,6 @@
 """The GitHub Action runner: pairs parsing, verdicts, JUnit, exit codes."""
 import importlib.util
+import json
 import os
 
 import pytest
@@ -39,11 +40,13 @@ def stretch_highs(samples, by=10):
     return out
 
 
-def set_env(monkeypatch, tmp_path, timing="", serial="", junit=""):
+def set_env(monkeypatch, tmp_path, timing="", serial="", events="", junit="", evidence=""):
     monkeypatch.setenv("INPUT_TIMING", timing)
     monkeypatch.setenv("INPUT_SERIAL", serial)
+    monkeypatch.setenv("INPUT_EVENTS", events)
     monkeypatch.setenv("INPUT_SAMPLERATE", "24000000")
     monkeypatch.setenv("INPUT_JUNIT", junit)
+    monkeypatch.setenv("INPUT_EVIDENCE", evidence)
     monkeypatch.chdir(tmp_path)
 
 
@@ -115,3 +118,49 @@ def test_no_checks_at_all_is_a_clean_error(check, monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as e:
         check.main()
     assert "nothing to check" in str(e.value)
+
+
+CLEAN_SPI_TRACE = {"traceEvents": [
+    {"ph": "B", "ts": 0.1, "pid": "gpio.cs", "tid": "falling", "name": "CS"},
+    {"ph": "E", "ts": 0.1, "pid": "gpio.cs", "tid": "falling", "name": "CS"},
+    {"ph": "B", "ts": 0.4, "pid": "spi.sck", "tid": "rising", "name": "SCK"},
+    {"ph": "E", "ts": 0.4, "pid": "spi.sck", "tid": "rising", "name": "SCK"},
+    {"ph": "B", "ts": 9.7, "pid": "gpio.cs", "tid": "rising", "name": "CS"},
+    {"ph": "E", "ts": 9.7, "pid": "gpio.cs", "tid": "rising", "name": "CS"},
+]}
+
+
+def test_events_input_judges_jsontrace(check, monkeypatch, tmp_path, capsys):
+    trace = tmp_path / "spi.json"
+    trace.write_text(json.dumps(CLEAN_SPI_TRACE))
+    set_env(monkeypatch, tmp_path, events=f"spi-frame={trace}")
+    assert check.main() == 0
+    out = capsys.readouterr().out
+    assert "events:spi-frame" in out and "all 1 checks PASS" in out
+
+
+def test_events_input_fails_on_broken_ordering(check, monkeypatch, tmp_path, capsys):
+    broken = {"traceEvents": [
+        {"ph": "B", "ts": 0.4, "pid": "spi.sck", "tid": "rising", "name": "SCK"},
+        {"ph": "E", "ts": 0.4, "pid": "spi.sck", "tid": "rising", "name": "SCK"},
+        {"ph": "B", "ts": 0.6, "pid": "gpio.cs", "tid": "falling", "name": "CS"},
+        {"ph": "E", "ts": 0.6, "pid": "gpio.cs", "tid": "falling", "name": "CS"},
+        {"ph": "B", "ts": 9.7, "pid": "gpio.cs", "tid": "rising", "name": "CS"},
+        {"ph": "E", "ts": 9.7, "pid": "gpio.cs", "tid": "rising", "name": "CS"},
+    ]}
+    trace = tmp_path / "spi.json"
+    trace.write_text(json.dumps(broken))
+    set_env(monkeypatch, tmp_path, events=f"spi-frame={trace}")
+    assert check.main() == 1
+    assert "cs-precedes-first-clock" in capsys.readouterr().out
+
+
+def test_evidence_file_carries_hashes(check, monkeypatch, tmp_path, good_csv):
+    evidence = tmp_path / "evidence.json"
+    set_env(monkeypatch, tmp_path, timing=f"ws2812={good_csv}", evidence=str(evidence))
+    assert check.main() == 0
+    data = json.loads(evidence.read_text())
+    assert data["checks"][0]["verdict"] == "PASS"
+    assert len(data["checks"][0]["contract_sha256"]) == 64
+    assert len(data["checks"][0]["input_sha256"]) == 64
+    assert data["checks"][0]["input_kind"] == "timing"

@@ -178,12 +178,19 @@ relationships *between* decoded events, which is the fault class loopback
 tests cannot see (chip-select asserting after the clock started, MOSI
 changing too close to the sampling edge, a response that never arrives).
 
-Events are normalized dicts, from `sigrok-cli --protocol-decoder-jsontrace`
-or any decoder that emits timestamps:
+Events are normalized dicts. Two ingestion paths feed them:
+
+- **Raw pin edges** (`hwcontract/edges.py`): multi-channel 0/1 waveforms in,
+  `rising`/`falling` events out, one per transition. This is what pin-level
+  contracts like the SPI ordering checks judge.
+- **Sigrok decoder annotations** (`jsontrace.py`): the B/E pairs that
+  `sigrok-cli --protocol-decoder-jsontrace` emits become one event each,
+  with source = pid, type = tid, and the annotation text in
+  `fields.text`. Selectors then match against the decoder's rows.
 
 ```json
-{"source": "spi0", "type": "clock_edge", "start_ns": 184020, "end_ns": 184025,
- "fields": {"value": 1}}
+{"source": "gpio.cs", "type": "falling", "start_ns": 184020,
+ "end_ns": 184020, "fields": {"value": 0}}
 ```
 
 ```yaml
@@ -191,16 +198,17 @@ contract: spi-frame
 kind: events
 assertions:
   - name: cs-precedes-first-clock
-    when: spi0.clock_edge.value=1    # trigger: each sampling edge
-    require: gpio.cs.value=0         # CS must already be asserted...
+    when: spi.sck.rising             # trigger: each rising SCK edge
+    require: gpio.cs.falling         # CS (active low) must already be asserted...
     within: [-10us, 0ns]             # ...before the edge (negative = look back)
-  - name: no-clock-outside-frame
-    forbid: spi0.clock_edge          # no clocking...
-    while: gpio.cs.value=1           # ...while the frame is deselected
   - name: mosi-setup
-    when: spi0.clock_edge.value=1
-    forbid: gpio.change
-    before: 20ns                     # no MOSI change in the 20ns before an edge
+    when: spi.sck.rising
+    forbid: spi.mosi.*               # no MOSI transition of any kind...
+    before: 20ns                     # ...in the 20ns before the sampling edge
+  - name: cs-frame-width
+    when: gpio.cs.falling
+    require: gpio.cs.rising
+    within: [4us, 30us]              # frame occupies 4..30us of wire time
 ```
 
 Selector grammar: the last dotted component is the event type, everything
@@ -208,8 +216,9 @@ before it is the source, and a `field=value` tail filters event fields.
 `gpio.cs.value=0` is source `gpio`, type `cs`, field `value` equal to 0.
 A selector like `gpio.mosi.change` means source `gpio.mosi`, type `change`;
 that reads naturally and means something different, so check the parse with
-`parse_selector` when a forbid passes suspiciously cleanly. A forbid that
-never appears anywhere in the trace says so in its hint.
+`parse_selector` when a forbid passes suspiciously cleanly. `*` matches any
+type of the named source. A forbid that never appears anywhere in the trace
+says so in its hint.
 
 Three assertion shapes:
 

@@ -18,7 +18,9 @@ jobs:
         run: |
           pip install -e .
           python3 - <<'EOF'
+          import json
           from hwcontract.sigrok_adapter import synth
+          from hwcontract.edges import edge_events
           dt = 1e9 / 24_000_000
 
           def stretch_highs(samples, by=10):
@@ -36,24 +38,51 @@ jobs:
           open("bad.csv", "w").write("\n".join(str(s) for s in stretch_highs(synth(dt))) + "\n")
           open("boot.log", "w").write("boot v3\nIMU init OK\nready\n")
           open("panic.log", "w").write("Guru Meditation Error\n")
+
+          # SPI edges: CS asserted before every SCK rising edge (clean), and
+          # a broken frame where the clock starts first (Zephyr #110302 shape)
+          def spi_trace(cs_late):
+              edges = []
+              edges.append({"source": "gpio.cs", "type": "falling",
+                            "start_ns": 600 if cs_late else 0, "end_ns": 600 if cs_late else 0,
+                            "fields": {"value": 0}})
+              edges.append({"source": "spi.sck", "type": "rising",
+                            "start_ns": 300, "end_ns": 300, "fields": {"value": 1}})
+              edges.append({"source": "gpio.cs", "type": "rising",
+                            "start_ns": 9700, "end_ns": 9700, "fields": {"value": 1}})
+              out = []
+              for e in edges:
+                  for ph in ("B", "E"):
+                      ts = e["start_ns"] if ph == "B" else e["end_ns"]
+                      out.append({"ph": ph, "ts": ts / 1000, "pid": e["source"],
+                                  "tid": e["type"], "name": e["type"]})
+              return {"traceEvents": out}
+
+          open("spi-good.json", "w").write(json.dumps(spi_trace(False)))
+          open("spi-bad.json", "w").write(json.dumps(spi_trace(True)))
           EOF
-      - name: Clean capture and boot log pass
+      - name: Clean capture, boot log, and SPI ordering pass
         uses: ./
         with:
           timing: "ws2812=good.csv"
           serial: "boot=boot.log"
+          events: "spi-frame=spi-good.json"
           junit: junit-pass.xml
-      - name: Stretched capture and panicking board fail
+          evidence: evidence-pass.json
+      - name: Stretched capture, panicking board, and late CS fail
         id: bad
         continue-on-error: true
         uses: ./
         with:
           timing: "ws2812=bad.csv"
           serial: "boot=panic.log"
+          events: "spi-frame=spi-bad.json"
           junit: junit-fail.xml
+          evidence: evidence-fail.json
       - name: The broken run must have failed and reported FAIL
         run: |
           test "${{ steps.bad.outputs.verdict }}" = "FAIL"
-          grep -q 'failures="2"' junit-fail.xml
+          grep -q 'failures="3"' junit-fail.xml
           grep -q 'failures="0"' junit-pass.xml
-          echo "action selftest OK: good PASS, bad FAIL, junit written"
+          python3 -c "import json; d=json.load(open('evidence-fail.json')); assert len(d['checks'])==3 and all(c['contract_sha256'] and c['input_sha256'] for c in d['checks'])"
+          echo "action selftest OK: good PASS, bad FAIL, junit + evidence written"

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 GOOD_OBS = [{"name": "T0H", "value": 333}, {"name": "T0L", "value": 792},
@@ -29,7 +31,7 @@ def test_failing_edge_is_a_failing_test(pytester):
         """)
     result = pytester.runpytest()
     result.assert_outcomes(failed=1)
-    assert "hwcontract verdict FAIL" in result.stdout.str()
+    assert "verdict: FAIL" in result.stdout.str()
 
 
 def test_failure_message_names_the_edge_and_delta(pytester):
@@ -43,7 +45,7 @@ def test_failure_message_names_the_edge_and_delta(pytester):
                 hwcontract.timing("ws2812b", OBS)
             msg = str(e.value)
             assert "T1L" in msg and "450ns long" in msg, msg
-            assert "verdict FAIL" in msg
+            assert "verdict: FAIL" in msg
         """)
     pytester.runpytest().assert_outcomes(passed=1)
 
@@ -98,6 +100,57 @@ def test_root_option_resolves_contracts(pytester):
             hwcontract.timing("mine.contract.yaml", [{"name": "OK", "value": 10}])
         """)
     pytester.runpytest("--hwcontract-root", str(pytester.path)).assert_outcomes(passed=1)
+
+
+def test_events_with_sigrok_style_trace(pytester):
+    trace = {"traceEvents": [
+        {"ph": "B", "ts": 0.1, "pid": "gpio.cs", "tid": "falling", "name": "CS"},
+        {"ph": "E", "ts": 0.1, "pid": "gpio.cs", "tid": "falling", "name": "CS"},
+        {"ph": "B", "ts": 0.4, "pid": "spi.sck", "tid": "rising", "name": "SCK"},
+        {"ph": "E", "ts": 0.4, "pid": "spi.sck", "tid": "rising", "name": "SCK"},
+        {"ph": "B", "ts": 9.7, "pid": "gpio.cs", "tid": "rising", "name": "CS"},
+        {"ph": "E", "ts": 9.7, "pid": "gpio.cs", "tid": "rising", "name": "CS"},
+    ]}
+    pytester.makefile(".json", trace=json.dumps(trace))
+    pytester.makepyfile(
+        """
+        def test_x(hwcontract):
+            hwcontract.events("spi-frame", trace="trace.json")
+        """)
+    pytester.runpytest().assert_outcomes(passed=1)
+
+
+def test_events_failure_names_the_assertion(pytester):
+    pytester.makepyfile(
+        """
+        import pytest
+
+        def test_x(hwcontract):
+            trace = [{"source": "spi.sck", "type": "rising", "start_ns": 400, "fields": {"value": 1}}]
+            with pytest.raises(AssertionError) as e:
+                hwcontract.events("spi-frame", trace=trace)
+            assert "cs-precedes-first-clock" in str(e.value)
+        """)
+    pytester.runpytest().assert_outcomes(passed=1)
+
+
+def test_junit_properties_carry_hashes(pytester):
+    pytester.makepyfile(
+        f"""
+        OBS = {GOOD_OBS!r}
+
+        def test_strip(hwcontract):
+            hwcontract.timing("ws2812b", OBS)
+        """)
+    result = pytester.runpytest("--junit-xml", "junit.xml")
+    result.assert_outcomes(passed=1)
+    import xml.etree.ElementTree as ET
+    ts = ET.parse("junit.xml").getroot()
+    props = {p.get("name"): p.get("value")
+             for p in ts.iter("property")}
+    assert props["hwcontract.verdict"] == "PASS"
+    assert len(props["hwcontract.contract_sha256"]) == 64
+    assert len(props["hwcontract.input_sha256"]) == 64
 
 
 def test_capture_csv_helper(pytester):

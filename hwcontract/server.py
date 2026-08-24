@@ -515,13 +515,16 @@ def selftest():
         {"jsonrpc": "2.0", "id": 12, "method": "tools/call", "params": {"name": 123}},
         call(13, "judge_serial", contract_path=ex("boot.contract.yaml"), log=good_log),
         call(14, "judge_events", contract_path=ex("spi-frame.contract.yaml"), events=[
-            {"source": "gpio", "type": "cs", "start_ns": 1000, "end_ns": 1000, "fields": {"value": 0}},
-            {"source": "spi0", "type": "clock_edge", "start_ns": 1200, "end_ns": 1205, "fields": {"value": 1}},
-            {"source": "gpio", "type": "change", "start_ns": 1100, "end_ns": 1100, "fields": {"line": "mosi"}},
-            {"source": "gpio", "type": "cs", "start_ns": 3000, "end_ns": 6000, "fields": {"value": 1}},
-            {"source": "gpio", "type": "cs", "start_ns": 6000, "end_ns": 6000, "fields": {"value": 0}},
-            {"source": "spi0", "type": "clock_edge", "start_ns": 6200, "end_ns": 6205, "fields": {"value": 1}},
-            {"source": "gpio", "type": "change", "start_ns": 6100, "end_ns": 6100, "fields": {"line": "mosi"}},
+            {"source": "gpio.cs", "type": "falling", "start_ns": 1000, "fields": {"value": 0}},
+            {"source": "spi.mosi", "type": "rising", "start_ns": 1240, "fields": {"value": 1}},
+            {"source": "spi.sck", "type": "rising", "start_ns": 1300, "fields": {"value": 1}},
+            {"source": "spi.sck", "type": "falling", "start_ns": 1800, "fields": {"value": 0}},
+            {"source": "gpio.cs", "type": "rising", "start_ns": 9700, "fields": {"value": 1}},
+            {"source": "gpio.cs", "type": "falling", "start_ns": 21000, "fields": {"value": 0}},
+            {"source": "spi.mosi", "type": "falling", "start_ns": 21240, "fields": {"value": 0}},
+            {"source": "spi.sck", "type": "rising", "start_ns": 21300, "fields": {"value": 1}},
+            {"source": "spi.sck", "type": "falling", "start_ns": 21800, "fields": {"value": 0}},
+            {"source": "gpio.cs", "type": "rising", "start_ns": 29700, "fields": {"value": 1}},
         ]),
     ]
     raw = "\n".join([json.dumps(m) for m in msgs] + ['{"jsonrpc": broken', "[1, 2, 3]"])
@@ -552,7 +555,7 @@ def selftest():
     assert json.loads(r[13]["result"]["content"][0]["text"])["ok"] is True   # still alive after all that
     body14 = json.loads(r[14]["result"]["content"][0]["text"])
     assert body14["ok"] is True and body14["verdict"] == "PASS"              # temporal assertions hold
-    assert body14["results"][1]["latency"]["count"] == 2                     # cs->clock latency seen twice
+    assert body14["results"][0]["latency"]["count"] == 2                     # cs->clock latency seen twice
 
     hdrs = {"MCP-Protocol-Version": MODERN_VERSION, "Mcp-Method": "tools/call",
             "Mcp-Name": "judge_serial"}

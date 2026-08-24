@@ -1,0 +1,12 @@
+{
+  "traceEvents": [
+    {"ph": "B", "ts": 104.166, "pid": "uart", "tid": "tx", "name": "0x55 'U'"},
+    {"ph": "E", "ts": 191.405, "pid": "uart", "tid": "tx", "name": "0x55 'U'"},
+    {"ph": "B", "ts": 191.840, "pid": "uart", "tid": "tx", "name": "0x41 'A'"},
+    {"ph": "E", "ts": 279.079, "pid": "uart", "tid": "tx", "name": "0x41 'A'"},
+    {"ph": "B", "ts": 279.514, "pid": "uart", "tid": "tx", "name": "0x52 'R'"},
+    {"ph": "E", "ts": 366.753, "pid": "uart", "tid": "tx", "name": "0x52 'R'"},
+    {"ph": "B", "ts": 367.188, "pid": "uart", "tid": "tx", "name": "0x54 'T'"},
+    {"ph": "E", "ts": 454.427, "pid": "uart", "tid": "tx", "name": "0x54 'T'"}
+  ]
+}

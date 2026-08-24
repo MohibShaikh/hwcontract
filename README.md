@@ -63,17 +63,18 @@ match the contract to the actual chip.
 python3 demo/spi_dma_temporal.py
 ```
 
-100 synthesized SPI frames, judged against the bundled `spi-frame` contract.
-Frame 77 has the Zephyr LPSPI DMA fault: chip-select asserts after the clock
-starts. Frame 42 settles MOSI 10ns before the sampling edge. Both come back
-with exact timestamps, and the same broken stream is re-judged through the
-sigrok jsontrace importer:
+100 synthesized SPI frames as raw CS/SCK/MOSI waveforms at 100MHz, reduced to
+pin edges and judged against the bundled `spi-frame` contract. Frame 77 has
+the Zephyr LPSPI DMA fault: chip-select asserts after the clock starts. Frame
+42 settles MOSI 10ns before the sampling edge. Both come back with exact
+timestamps, and the same broken edges are re-imported as sigrok-style B/E
+jsontrace annotations:
 
 ```
-cs-precedes-first-clock  800  1  FAIL  trigger at 1540300ns: no gpio.cs.value=0
-                                          in [1530300ns, 1540300ns] (first of 1)
-mosi-setup               800  1  FAIL  forbidden gpio.change at 843290ns is 10ns
-                                          before spi0.clock_edge.value=1 at 843300ns
+cs-precedes-first-clock  800  1  FAIL  trigger at 1540310ns: no gpio.cs.falling
+                                          in [1530310ns, 1540310ns] (first of 1)
+mosi-setup               800  1  FAIL  forbidden spi.mosi.* at 843300ns is 10ns
+                                          before spi.sck.rising at 843310ns
 ```
 
 The data is perfect in all 100 frames; a loopback test passes. The ordering is
@@ -238,15 +239,15 @@ forbid: ["panic", "Guru Meditation", "\\bnan\\b"]
 ```
 
 Events (`spi-frame.contract.yaml`) assert relationships between decoded
-events — SVA-style temporal checks on real traces:
+events — SVA-style temporal checks on raw pin edges or sigrok annotations:
 ```yaml
 contract: spi-frame
 kind: events
 assertions:
-  - {name: cs-precedes-first-clock, when: spi0.clock_edge.value=1,
-     require: gpio.cs.value=0, within: [-10us, 0ns]}
-  - {name: mosi-setup, when: spi0.clock_edge.value=1,
-     forbid: gpio.change, before: 20ns}
+  - {name: cs-precedes-first-clock, when: spi.sck.rising,
+     require: gpio.cs.falling, within: [-10us, 0ns]}
+  - {name: mosi-setup, when: spi.sck.rising,
+     forbid: spi.mosi.*, before: 20ns}
 ```
 
 Add a protocol = drop a new YAML. No code change for another timing signal.

@@ -12,6 +12,6 @@ def test_spi_dma_demo_runs_and_catches_both_faults():
     assert r.returncode == 0, r.stderr
     out = r.stdout
     assert "100 healthy frames" in out and "PASS" in out
-    assert "trigger at 1540300ns" in out, "the DMA CS-ordering fault must be named"
+    assert "trigger at 1540310ns" in out, "the DMA CS-ordering fault must be named"
     assert "10ns before" in out, "the MOSI setup fault must be named"
-    assert "jsontrace importer" in out
+    assert "B/E jsontrace" in out

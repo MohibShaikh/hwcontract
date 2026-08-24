@@ -16,11 +16,19 @@ inputs:
       Serial checks as contract=log-glob pairs, same syntax. Logs are plain text
       judged against the contract's expect/forbid regexes.
     required: false
+  events:
+    description: >-
+      Event checks as contract=trace-glob pairs, same syntax. Traces are JSON:
+      sigrok-cli --protocol-decoder-jsontrace output or a bare event list.
+    required: false
   samplerate:
     description: "Samplerate of the CSV captures in Hz"
     default: "24000000"
   junit:
     description: "Write a JUnit XML report to this path (shows in GitHub's tests tab)"
+    default: ""
+  evidence:
+    description: "Write an evidence JSON (contract + input hashes per check) to this path"
     default: ""
 
 outputs:
@@ -34,14 +42,16 @@ runs:
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - run: pip install --quiet "hwcontract>=0.3"
+    - run: pip install --quiet "hwcontract==0.4.2"
       shell: bash
     - id: check
       env:
         INPUT_TIMING: ${{ inputs.timing }}
         INPUT_SERIAL: ${{ inputs.serial }}
+        INPUT_EVENTS: ${{ inputs.events }}
         INPUT_SAMPLERATE: ${{ inputs.samplerate }}
         INPUT_JUNIT: ${{ inputs.junit }}
+        INPUT_EVIDENCE: ${{ inputs.evidence }}
       run: |
         set +e
         python "$GITHUB_ACTION_PATH/action/check.py"

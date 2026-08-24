@@ -112,7 +112,7 @@ def parse_selector(sel):
 def event_matches(sel, event):
     if sel["source"] is not None and event.get("source") != sel["source"]:
         return False
-    if event.get("type") != sel["type"]:
+    if sel["type"] != "*" and event.get("type") != sel["type"]:
         return False
     if sel["field"] is not None:
         fields = event.get("fields") or {}
@@ -319,6 +319,22 @@ def evidence(contract_path, **extra):
           "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     ev.update(extra)
     return ev
+
+
+def verdict(contract_path, results, ok, input_kind, input_sha256, **params):
+    """The canonical result every surface returns or prints: verdict, rows,
+    and the hashes that make a green build reproducible."""
+    ev = evidence(contract_path)
+    return {"verdict": "PASS" if ok else "FAIL", "ok": ok, "results": results,
+            "contract_sha256": ev["contract_sha256"], "input_kind": input_kind,
+            "input_sha256": input_sha256, "hwcontract_version": __version__,
+            "timestamp_utc": ev["timestamp_utc"], **params}
+
+
+def render_verdict(v, table):
+    return (f"verdict: {v['verdict']}  contract {v['contract_sha256'][:12]}  "
+            f"{v['input_kind']} {v['input_sha256'][:12]}  "
+            f"hwcontract {v['hwcontract_version']}\n{table}")
 
 
 def _violations(edge, obs):
