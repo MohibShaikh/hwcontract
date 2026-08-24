@@ -475,5 +475,7 @@ if __name__ == "__main__":
     if len(sys.argv) != 3:
         sys.exit(__doc__)
     results, ok = run(load_contract(sys.argv[1]), json.load(open(sys.argv[2])))
-    print(render(results))
+    v = verdict(sys.argv[1], results, ok, input_kind="observations",
+                input_sha256=sha256_of(open(sys.argv[2], "rb").read()))
+    print(render_verdict(v, render(results)))
     sys.exit(0 if ok else 1)

@@ -220,6 +220,7 @@ def main(argv=None):
     if len(argv) != 2:
         sys.exit(__doc__)
     from hwcontract.jsontrace import from_traceevents
+    from hwcontract.judge import render_verdict, sha256_of, verdict
     try:
         doc = json.load(open(argv[1]))
     except (OSError, json.JSONDecodeError) as e:
@@ -229,7 +230,9 @@ def main(argv=None):
         results, ok = judge_events(load_contract(argv[0]), events)
     except (ContractError, EventError) as e:
         sys.exit(f"hwcontract: {e}")
-    print(render_events(results))
+    v = verdict(argv[0], results, ok, input_kind="events",
+                input_sha256=sha256_of(events), event_count=len(events))
+    print(render_verdict(v, render_events(results)))
     sys.exit(0 if ok else 1)
 
 
