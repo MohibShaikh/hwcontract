@@ -8,6 +8,10 @@ KILLSWITCH
 .venv/
 uv.lock
 .claude/
+AGENTS.md
+CLAUDE.md
+AGENTS.md
+CLAUDE.md
 
 # local secrets — never commit
 .pypirc
