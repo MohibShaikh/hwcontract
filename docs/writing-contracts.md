@@ -2,20 +2,22 @@
 
 A contract is one YAML file that says what correct looks like on the wire.
 It lives in `hwcontract/examples/`, ships with the package, and the judges
-evaluate it without touching hardware. The 27 bundled contracts are the
+evaluate it without touching hardware. The 28 bundled contracts are the
 reference library: pick the closest part, copy it, adjust the numbers.
 
-Two kinds of contracts exist, judged by two different tools:
+Three kinds of contracts exist, judged by three different tools:
 
 | kind            | what it checks             | tool                                          | examples                 |
 |-----------------|----------------------------|-----------------------------------------------|--------------------------|
 | timing, no kind | pulse widths in ns         | `judge_contract`, `check_ws2812`, `check_dshot` | ws2812b, dshot, servo, hc-sr04 |
 | serial          | regexes against a log      | `judge_serial`, `check_serial`                | boot, esp32, nrf54l15    |
+| events          | relationships between decoded events | `judge_events`, the `temporal` CLI  | spi-frame                |
 
-The `kind` line is documentation. The MCP tool you call picks the judge:
-`judge_contract` runs the edge table, `judge_serial` runs expect/forbid.
+The `kind` line selects which schema validates the file, and the MCP tool
+you call picks the judge: `judge_contract` runs the edge table,
+`judge_serial` runs expect/forbid, `judge_events` runs temporal assertions.
 A serial contract without `kind: serial` still judges fine, but the label
-keeps the file self-describing.
+keeps the file self-describing and validation strict.
 
 ## Timing contract anatomy
 

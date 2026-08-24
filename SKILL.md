@@ -1,6 +1,6 @@
 ---
 name: hwcontract
-description: Use when firmware has timing or level requirements you can measure against a spec: pulse widths on a WS2812/NeoPixel strip, DShot ESC, servo, I2C, NEC IR, DS18B20/DHT sensor, A4988/DRV8825 stepper, PWM fan, HC-SR04, or when a board prints a boot log over serial (ESP32, ESP8266, Zephyr, MicroPython, u-boot, Raspberry Pi, STM32). Invoke before declaring firmware done. Not for plain UART framing, power/wiring, or torque/current issues.
+description: Use when firmware has timing or level requirements you can measure against a spec: pulse widths on a WS2812/NeoPixel strip, DShot ESC, servo, I2C, NEC IR, DS18B20/DHT sensor, A4988/DRV8825 stepper, PWM fan, HC-SR04, when a board prints a boot log over serial (ESP32, ESP8266, Zephyr, MicroPython, u-boot, Raspberry Pi, STM32), or when decoded logic-analyzer events need cross-signal temporal assertions (SPI CS/MOSI/clock ordering and setup/hold). Invoke before declaring firmware done. Not for plain UART framing, power/wiring, or torque/current issues.
 ---
 
 # hwcontract
@@ -36,6 +36,14 @@ contract: boot
 kind: serial
 expect: ["IMU init OK", "boot v\\d+"]
 forbid: ["panic", "Guru Meditation"]
+```
+
+```yaml
+contract: spi-frame
+kind: events             # cross-signal assertions on decoded events
+assertions:
+  - {name: cs-precedes-first-clock, when: spi0.clock_edge.value=1,
+     require: gpio.cs.value=0, within: [-10us, 0ns]}
 ```
 
 ## Writing a new contract

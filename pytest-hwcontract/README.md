@@ -22,7 +22,7 @@ def test_boot(hwcontract):
 ```
 
 Contracts resolve as: an existing path, then `--hwcontract-root <dir>`, then
-the 27 contracts bundled with `hwcontract` by name.
+the 28 contracts bundled with `hwcontract` by name.
 
 A failing verdict reads like the CLI's:
 

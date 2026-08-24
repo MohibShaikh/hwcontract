@@ -57,13 +57,18 @@ match the contract to the actual chip.
 
 ## What you get
 
-- **27 bundled contracts** for the parts people actually use: WS2812/WS2813/
+- **28 bundled contracts** for the parts people actually use: WS2812/WS2813/
   SK6812 NeoPixels, DShot ESCs (150/300/600/1200), servos, I2C, NEC IR remotes,
   DS18B20, DHT11/DHT22, HC-SR04, A4988/DRV8825 stepper drivers, PWM fans, plus
   serial boot logs for ESP32, ESP8266, Zephyr, MicroPython, Raspberry Pi, U-Boot,
   and STM32 bootloaders. Each one has the datasheet's real min/typ/max numbers.
+- **Temporal assertions between decoded events.** SVA-style cross-signal checks
+  (ordering, setup windows, forbidden states) on sigrok jsontrace output, judged
+  for every occurrence with latency percentiles and first-failure timestamps.
 - **Add a protocol by dropping in one YAML file.** No code change.
 - **An MCP server** your agent can call, or plain CLI commands you can run by hand.
+- **Evidence on every verdict:** contract hash, capture hash, capture parameters,
+  tool version, timestamp. A green build traces back to the exact bytes.
 - **Reasonable by default:** timing edges are all measured in nanoseconds, serial
   contracts are Python regex, verdicts come back with the measured value and the
   delta so an agent knows exactly what to fix.
@@ -175,15 +180,17 @@ clean and one deliberately broken capture.
 ## How it fits together
 
 ```
-  observers (capture)                judge (this repo)
-  ─────────────────────              ─────────────────
+  observers (capture)                  judge (this repo)
+  ─────────────────────                ─────────────────
   logic analyzer  ─ pulse widths ─┐
   serial port     ─ log text ─────┼─►  contract × observation  ─►  pass/marginal/fail
-                                  ┘         (judge.py)
+  sigrok jsontrace ─ events ──────┘         (judge.py / temporal.py)
 ```
 
-- **`judge.py`.** The pure judge for timing and serial. No hardware, no framework, cached.
-- **`sigrok_adapter.py`.** Turns a logic-analyzer capture into pulse-width observations for WS2812 and DShot.
+- **`judge.py`.** The pure judge for timing and serial, plus contract validation. No hardware, no framework, cached.
+- **`temporal.py`.** Cross-event temporal assertions: selectors, signed windows, latency distributions, first-failure timestamps.
+- **`jsontrace.py`.** Imports sigrok-cli's Google Trace Event JSON into normalized events.
+- **`sigrok_adapter.py`.** Turns a logic-analyzer capture into pulse-width distributions for WS2812 and DShot.
 - **`serial_adapter.py`.** Captures a serial log, or replays a saved one.
 - **`server.py`.** The MCP server, stdio and HTTP JSON-RPC, stdlib only.
 - **`*.contract.yaml`.** What "correct" looks like. Human-editable, and they double as regression tests.
@@ -204,6 +211,18 @@ contract: boot
 kind: serial
 expect: ["IMU init OK", "boot v\\d+"]
 forbid: ["panic", "Guru Meditation", "\\bnan\\b"]
+```
+
+Events (`spi-frame.contract.yaml`) assert relationships between decoded
+events — SVA-style temporal checks on real traces:
+```yaml
+contract: spi-frame
+kind: events
+assertions:
+  - {name: cs-precedes-first-clock, when: spi0.clock_edge.value=1,
+     require: gpio.cs.value=0, within: [-10us, 0ns]}
+  - {name: mosi-setup, when: spi0.clock_edge.value=1,
+     forbid: gpio.change, before: 20ns}
 ```
 
 Add a protocol = drop a new YAML. No code change for another timing signal.
