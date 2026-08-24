@@ -26,6 +26,8 @@ Two things a green verdict gives you beyond the table:
 No hardware in your hand? The demo below runs the whole thing on a real recorded
 signal, so you can see exactly what you get before wiring anything up.
 
+![hwcontract judging a real WS2812B capture, a DMA-broken SPI trace, and a serial boot log](https://raw.githubusercontent.com/MohibShaikh/hwcontract/main/demo/hwcontract.gif)
+
 ## See it work in 30 seconds
 
 ```bash
@@ -187,7 +189,7 @@ The repo ships a GitHub Action, so captures checked into the repo get judged
 on every PR:
 
 ```yaml
-- uses: MohibShaikh/hwcontract@v0
+- uses: MohibShaikh/hwcontract@action-v0
   with:
     timing: "ws2812b=captures/strip.csv"     # contract=capture-glob, bundled names work
     serial: "boot=logs/boot.log"
