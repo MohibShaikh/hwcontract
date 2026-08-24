@@ -56,19 +56,21 @@ does for TRIG: `min: 10000, typ: 10000, max: null` for ">=10us trigger".
 threshold = headroom_pct / 100 * (hi - lo)
 if min(v - lo, hi - v) < threshold:
     near = "min" if v - lo < hi - v else "max"
-    return "marginal", f"only {min(v - lo, hi - v)}ns from {near}; nudge toward typ {typ}"
+    return MARGINAL, f"only {min(v - lo, hi - v)}ns from {near}; nudge toward typ {typ}"
 ```
 
 The threshold is a fraction of the whole window, measured from each rail. For
 WS2812B T0H, the window is 250..550ns, 300ns wide. At `headroom_pct: 20` the
 threshold is 60ns: a measured 520ns sits 30ns from max, so the verdict is
-`marginal: only 30ns from max; nudge toward typ 400`. A healthy 333ns sits
+`MARGINAL: only 30ns from max; nudge toward typ 400`. A healthy 333ns sits
 83ns from min and passes.
 
-Marginal is a fail. It works on your bench and dies on a cold board in the
-field. Keep the value used by the closest example: LEDs use 20, DShot uses 15
-because ESCs are less forgiving. Don't crank the number down to silence
-marginals; fix the driver instead.
+Marginal is a fail, and the judge enforces it: any MARGINAL edge makes the
+overall verdict fail, same as FAIL or MISSING. In spec but rail-hugging works
+on your bench and dies on a cold board in the field. Keep the value used by
+the closest example: LEDs use 20, DShot uses 15 because ESCs are less
+forgiving. Don't crank the number down to silence marginals; fix the driver
+instead.
 
 ## Edge naming
 
@@ -85,6 +87,18 @@ uses `TRIG`, `ECHO`, `CYCLE`.
 A misspelled edge never matches an observation and reports `MISSING: no
 observation for this edge`, which fails the judgment. That is the behavior you
 want: a wrong name cannot silently pass.
+
+## Validation
+
+`load_contract` validates before judging and raises `ContractError` listing
+every problem at once. A timing contract rejects: missing `contract`,
+`headroom_pct` (0..100) or `edges`; unknown top-level keys; a `unit` other
+than `ns`; edge names that are empty, duplicated, or not strings; min/typ/max
+that are missing, negative, non-numeric, NaN or infinite; `min > typ` and
+`typ > max`. A serial contract rejects: unknown keys, patterns that are not
+strings, regexes that do not compile, and a file with no expect or forbid
+patterns at all. The bundled examples are all covered by this in `tests/`,
+so a typo cannot reach the judge.
 
 ## Serial contracts
 
@@ -248,3 +262,4 @@ python3 -m hwcontract.serial_adapter --demo
 - Boot-banner patterns match a boot that happens inside the capture window.
 - Known-good capture passes, known-bad capture fails the right edges.
 - Headers comment the part's quirks and the sources of the numbers.
+- `pytest` passes: the suite validates every bundled contract.

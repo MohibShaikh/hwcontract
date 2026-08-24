@@ -23,6 +23,7 @@ dependencies = ["pyyaml>=6"]
 serial = ["pyserial>=3.5"]          # live serial capture (check_serial)
 untrusted = ["google-re2>=1.1"]     # ReDoS-immune regex for untrusted serial contracts
 all = ["pyserial>=3.5", "google-re2>=1.1"]
+dev = ["pytest>=8"]                 # tests/ suite
 
 [project.scripts]
 hwcontract = "hwcontract.server:main"

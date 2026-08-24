@@ -3,9 +3,15 @@
 
 Pure logic, no hardware, no framework. Imported by server.py (MCP) and runnable
 standalone:  python judge.py ws2812.contract.yaml observations.json
-             python judge.py --demo
+              python judge.py --demo
+
+Verdicts are the four uppercase enums PASS / MARGINAL / FAIL / MISSING.
+MARGINAL is in spec but rail-hugging; it makes the overall verdict fail.
+Contracts are validated on load (validate_contract): a malformed contract is
+a ContractError with every problem listed, never a KeyError mid-judgment.
 """
 import json
+import math
 import os
 import sys
 from functools import lru_cache
@@ -17,45 +23,154 @@ try:                       # prefer google-re2 (pip install google-re2): linear-
 except ImportError:
     import re              # stdlib fallback; the input cap in run_serial bounds ReDoS
 
+PASS, MARGINAL, FAIL, MISSING = "PASS", "MARGINAL", "FAIL", "MISSING"
+
+# A serial capture longer than this is truncated before matching: bounds memory
+# and the ReDoS blast radius under stdlib re.
+SERIAL_CAP = 1_000_000
+
+_TIMING_KEYS = {"contract", "kind", "unit", "headroom_pct", "edges"}
+_SERIAL_KEYS = {"contract", "kind", "expect", "forbid"}
+_EDGE_KEYS = {"name", "min", "typ", "max"}
+
+
+class ContractError(ValueError):
+    """A contract that fails validation. Message lists every problem found."""
+
+
+def _num(value, what, problems):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        problems.append(f"{what} must be a number, got {value!r}")
+        return None
+    if not math.isfinite(value):
+        problems.append(f"{what} must be finite, got {value!r}")
+        return None
+    if value < 0:
+        problems.append(f"{what} must be >= 0, got {value!r}")
+        return None
+    return value
+
+
+def validate_contract(contract):
+    """Raise ContractError listing every problem, or return the contract untouched."""
+    problems = []
+    if not isinstance(contract, dict):
+        raise ContractError(f"contract must be a mapping, got {type(contract).__name__}")
+
+    kind = contract.get("kind", "timing")
+    if kind not in ("timing", "serial"):
+        problems.append(f"kind must be 'timing' or 'serial', got {kind!r}")
+
+    name = contract.get("contract")
+    if not isinstance(name, str) or not name.strip():
+        problems.append("'contract' must be a non-empty string")
+
+    if kind == "serial":
+        unknown = set(contract) - _SERIAL_KEYS
+        if unknown:
+            problems.append(f"unknown keys for a serial contract: {sorted(unknown)}")
+        patterns = []
+        for field in ("expect", "forbid"):
+            pats = contract.get(field, [])
+            if not isinstance(pats, list) or any(not isinstance(p, str) for p in pats):
+                problems.append(f"'{field}' must be a list of regex strings")
+                continue
+            patterns += pats
+        if not patterns:
+            problems.append("a serial contract needs at least one expect or forbid pattern")
+        for pat in patterns:
+            if isinstance(pat, str):
+                try:
+                    re.compile(pat)
+                except Exception as e:
+                    problems.append(f"bad regex {pat!r}: {e}")
+    else:
+        unknown = set(contract) - _TIMING_KEYS
+        if unknown:
+            problems.append(f"unknown keys for a timing contract: {sorted(unknown)}")
+        unit = contract.get("unit", "ns")
+        if unit != "ns":
+            problems.append(f"unit must be 'ns', got {unit!r}")
+        headroom = _num(contract.get("headroom_pct"), "headroom_pct", problems)
+        if headroom is not None and headroom > 100:
+            problems.append(f"headroom_pct must be <= 100, got {headroom!r}")
+        edges = contract.get("edges")
+        if not isinstance(edges, list) or not edges:
+            problems.append("'edges' must be a non-empty list")
+            edges = []
+        seen = set()
+        for i, edge in enumerate(edges):
+            if not isinstance(edge, dict):
+                problems.append(f"edges[{i}] must be a mapping")
+                continue
+            unknown = set(edge) - _EDGE_KEYS
+            if unknown:
+                problems.append(f"edges[{i}] has unknown keys: {sorted(unknown)}")
+            ename = edge.get("name")
+            if not isinstance(ename, str) or not ename.strip():
+                problems.append(f"edges[{i}].name must be a non-empty string")
+            elif ename in seen:
+                problems.append(f"duplicate edge name: {ename!r}")
+            else:
+                seen.add(ename)
+            lo = _num(edge.get("min"), f"edges[{ename or i}].min", problems)
+            typ = _num(edge.get("typ"), f"edges[{ename or i}].typ", problems)
+            hi = edge.get("max")
+            if hi is not None:
+                hi = _num(hi, f"edges[{ename or i}].max", problems)
+            if None not in (lo, typ) and lo > typ:
+                problems.append(f"edges[{ename or i}]: min {lo} > typ {typ}")
+            if None not in (typ, hi) and typ > hi:
+                problems.append(f"edges[{ename or i}]: typ {typ} > max {hi}")
+
+    if problems:
+        raise ContractError("invalid contract:\n  - " + "\n  - ".join(problems))
+    return contract
+
 
 @lru_cache(maxsize=64)
 def _load(path, _mtime):
-    return yaml.safe_load(open(path))
+    with open(path) as f:
+        doc = yaml.safe_load(f)
+    return validate_contract(doc)
 
 
 def load_contract(path):
-    """Parse a contract YAML, cached until the file's mtime changes."""
+    """Parse and validate a contract YAML, cached until the file's mtime changes."""
     return _load(path, os.path.getmtime(path))
 
 
 def judge(edge, obs, headroom_pct):
     """(status, hint) for one edge given its observation (or None)."""
     if obs is None:
-        return "MISSING", "no observation for this edge"
+        return MISSING, "no observation for this edge"
 
     v, lo, hi, typ = obs["value"], edge["min"], edge["max"], edge["typ"]
 
+    if not math.isfinite(v):
+        return FAIL, "non-finite measurement (NaN/inf) in the capture"
+
     if v < lo or (hi is not None and v > hi):
         short = typ - v
-        return "FAIL", f"{abs(short)}ns {'short' if short > 0 else 'long'} (typ {typ})"
+        return FAIL, f"{abs(short)}ns {'short' if short > 0 else 'long'} (typ {typ})"
 
     if hi is not None:                                  # flag rail-hugging (marginal)
         threshold = headroom_pct / 100 * (hi - lo)
         if min(v - lo, hi - v) < threshold:
             near = "min" if v - lo < hi - v else "max"
-            return "marginal", f"only {min(v - lo, hi - v)}ns from {near}; nudge toward typ {typ}"
+            return MARGINAL, f"only {min(v - lo, hi - v)}ns from {near}; nudge toward typ {typ}"
 
-    return "pass", ""
+    return PASS, ""
 
 
 def run(contract, observations):
-    """Return (results, ok). results = list of dicts; ok False if any FAIL/MISSING."""
+    """Return (results, ok). ok is False on FAIL, MISSING, and MARGINAL: marginal is a fail."""
     by_name = {o["name"]: o for o in observations}
     results, ok = [], True
     for edge in contract["edges"]:
         obs = by_name.get(edge["name"])
         status, hint = judge(edge, obs, contract["headroom_pct"])
-        if status in ("FAIL", "MISSING"):
+        if status != PASS:
             ok = False
         results.append({"edge": edge["name"], "typ": edge["typ"],
                         "actual": obs["value"] if obs else None,
@@ -65,9 +180,7 @@ def run(contract, observations):
 
 def run_serial(contract, log):
     """Check a captured serial log against expect/forbid patterns. Same (results, ok) shape."""
-    # Bound the regex input (memory + ReDoS blast radius under stdlib re). With
-    # google-re2 installed, matching is linear-time and contracts can be untrusted.
-    log = log[:1_000_000]
+    log = log[:SERIAL_CAP]
     results, ok = [], True
 
     def search(pat):
@@ -81,7 +194,7 @@ def run_serial(contract, log):
         good = hit and not err
         ok = ok and bool(good)
         results.append({"edge": pat, "typ": "expect", "actual": "seen" if good else "absent",
-                        "status": "pass" if good else "FAIL",
+                        "status": PASS if good else FAIL,
                         "hint": err or ("" if good else "expected pattern not in capture")})
     for pat in contract.get("forbid", []):
         hit, err = search(pat)
@@ -89,7 +202,7 @@ def run_serial(contract, log):
         ok = ok and not bad
         results.append({"edge": pat, "typ": "forbid",
                         "actual": hit.group(0) if hit else "absent",
-                        "status": "FAIL" if bad else "pass",
+                        "status": FAIL if bad else PASS,
                         "hint": err or (f"forbidden match: {hit.group(0)}" if hit else "")})
     return results, ok
 
@@ -113,9 +226,9 @@ def demo():
     results, ok = run(contract, obs)
     print(render(results))
     st = {r["edge"]: r["status"] for r in results}
-    assert st["T0H"] == "pass"
-    assert st["T1H"] == "marginal"
-    assert st["RESET"] == "MISSING"
+    assert st["T0H"] == PASS
+    assert st["T1H"] == MARGINAL
+    assert st["RESET"] == MISSING
     assert ok is False
     print("\nself-check OK")
 

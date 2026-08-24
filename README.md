@@ -11,7 +11,7 @@ can act on:
 
 - **pass**: within spec
 - **marginal**: in spec but too close to a rail. Works on your bench, dies on a
-  cold board in the field. Treat it as a fail.
+  cold board in the field. It fails the verdict: the judge will not ship it.
 - **fail**: out of spec, with the measured value and how far off it is
 
 No hardware in your hand? The demo below runs the whole thing on a real recorded
@@ -32,12 +32,14 @@ measured on the real WS2812B signal (300000 samples @24MHz):
   T0H 333 ns   T1H 833 ns   T1L 417 ns   T0L 917 ns   RESET 992250 ns
 
 === generic WS2812 contract -> FAIL ===
-  T1L   600   417   FAIL   183ns short (typ 600)      # real WS2812B low times are shorter
-  T0L   800   917   marginal
-  T1H   700   833   marginal
+  T0H     350   333  PASS
+  T0L     800   917  MARGINAL  only 33ns from max; nudge toward typ 800
+  T1H     700   833  MARGINAL  only 17ns from max; nudge toward typ 700
+  T1L     600   417  FAIL      183ns short (typ 600)
+  RESET 50000    -  PASS
 
 === matching WS2812B contract -> PASS ===
-  (all pass)
+  (all five edges PASS)
 ```
 
 Same hardware, two contracts: the generic one fails, the chip-specific one
@@ -187,4 +189,7 @@ hwcontract --selftest                       # full MCP round-trip
 python3 -m hwcontract.judge --demo
 python3 -m hwcontract.sigrok_adapter --demo
 python3 -m hwcontract.serial_adapter --demo
+pytest                                      # the tests/ suite; pip install -e .[dev]
 ```
+
+CI runs the suite on every push and PR, and the PyPI publish job waits for it.

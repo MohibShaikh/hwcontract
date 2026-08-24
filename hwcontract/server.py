@@ -215,7 +215,7 @@ def _modern(msg, meta):
     if method == "tools/list":
         return _res(mid, {"tools": _tools()})
     if method == "tools/call":
-        return _res(mid, _call(msg["params"]))
+        return _res(mid, _call(msg.get("params") or {}))
     if mid is None:
         return None
     return _err(mid, -32601, f"method not found: {method}")
@@ -231,7 +231,7 @@ def _legacy(msg):
     if method == "tools/list":
         return _ok(mid, {"tools": _tools()})
     if method == "tools/call":
-        return _ok(mid, _call(msg["params"]))
+        return _ok(mid, _call(msg.get("params") or {}))
     if mid is None:                                     # a notification (e.g. initialized)
         return None
     return _err(mid, -32601, f"method not found: {method}")
@@ -243,13 +243,22 @@ def _tools():
 
 
 def _call(params):
-    """A tool that raises is a result with isError, not a protocol error."""
-    name = params["name"]
-    tool = TOOLS.get(name)
+    """A tool that raises is a result with isError, not a protocol error. A malformed
+    request (missing name, non-object arguments) is an error result too: the stdio
+    loop must survive anything a client sends."""
+    if not isinstance(params, dict):
+        return _content("invalid params: expected an object with 'name'", is_error=True)
+    name = params.get("name")
+    tool = TOOLS.get(name) if isinstance(name, str) else None
     if tool is None:
-        return _content(f"unknown tool: {name}", is_error=True)
+        return _content(f"unknown tool: {name!r}", is_error=True)
+    args = params.get("arguments")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return _content(f"invalid arguments for {name}: expected an object", is_error=True)
     try:
-        return _content(json.dumps(tool["fn"](**params.get("arguments", {})), indent=2))
+        return _content(json.dumps(tool["fn"](**args), indent=2))
     except Exception as e:
         return _content(f"{type(e).__name__}: {e}", is_error=True)
 
@@ -287,7 +296,12 @@ def serve(stdin, stdout):
             _emit(stdout, {"jsonrpc": "2.0", "id": None,
                            "error": {"code": -32700, "message": "parse error"}})
             continue
-        resp = _handle(msg)
+        try:
+            resp = _handle(msg)
+        except Exception as e:                  # a hostile/broken request must never kill the loop
+            mid = msg.get("id") if isinstance(msg, dict) else None
+            resp = {"jsonrpc": "2.0", "id": mid,
+                    "error": {"code": -32603, "message": f"internal error: {type(e).__name__}: {e}"}}
         if resp is not None:
             _emit(stdout, resp)
 
@@ -305,7 +319,7 @@ def _emit(stdout, obj):
 
 # Error code -> HTTP status, for modern requests only. Legacy clients expect their
 # JSON-RPC errors wrapped in a 200 and would read a 4xx as a dead endpoint.
-HTTP_STATUS = {-32020: 400, -32021: 400, -32022: 400, -32602: 400, -32601: 404}
+HTTP_STATUS = {-32020: 400, -32021: 400, -32022: 400, -32602: 400, -32601: 404, -32603: 500}
 
 
 def _unsentinel(v):
@@ -375,7 +389,11 @@ def serve_http(port, host="127.0.0.1"):
                 bad = _header_error(self.headers, msg)
                 if bad:
                     return self._send(400, bad)
-            resp = _handle(msg)
+            try:
+                resp = _handle(msg)
+            except Exception as e:                  # mirror the stdio loop: answer, don't drop the connection
+                resp = {"jsonrpc": "2.0", "id": msg.get("id") if isinstance(msg, dict) else None,
+                        "error": {"code": -32603, "message": f"internal error: {type(e).__name__}: {e}"}}
             if resp is None:                            # notification -> 202, no body
                 self.send_response(202)
                 self.end_headers()
@@ -442,12 +460,24 @@ def selftest():
                arguments={"contract_path": ex("boot.contract.yaml"), "log": good_log}),
         {"jsonrpc": "2.0", "id": 9, "method": "tools/list",
          "params": {"_meta": {_V: "1900-01-01", _CAPS: {}}}},
+        # hostile requests: each must come back as an error result, never kill the loop
+        {"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {}},
+        {"jsonrpc": "2.0", "id": 11, "method": "tools/call",
+         "params": {"name": "judge_serial", "arguments": "oops"}},
+        {"jsonrpc": "2.0", "id": 12, "method": "tools/call", "params": {"name": 123}},
+        call(13, "judge_serial", contract_path=ex("boot.contract.yaml"), log=good_log),
     ]
+    raw = "\n".join([json.dumps(m) for m in msgs] + ['{"jsonrpc": broken', "[1, 2, 3]"])
     out = io.StringIO()
-    serve(io.StringIO("\n".join(json.dumps(m) for m in msgs)), out)
-    r = {m["id"]: m for m in (json.loads(l) for l in out.getvalue().splitlines())}
+    serve(io.StringIO(raw), out)
+    responses = [json.loads(l) for l in out.getvalue().splitlines()]
+    r = {m["id"]: m for m in responses if m.get("id") is not None}
+    strays = [m for m in responses if m.get("id") is None]
 
-    assert len(r) == 9                              # the notification produced no response
+    assert len(responses) == 15                     # 13 ids + parse error + non-object request
+    assert len(strays) == 2
+    assert strays[0]["error"]["code"] == -32700     # malformed JSON -> parse error
+    assert strays[1]["error"]["code"] == -32603     # non-object request -> internal error, loop lives
     assert r[1]["result"]["protocolVersion"] == LEGACY_VERSIONS[0]   # no version asked -> newest legacy
     assert {t["name"] for t in r[2]["result"]["tools"]} == set(TOOLS)
     assert json.loads(r[3]["result"]["content"][0]["text"])["ok"] is True    # WS2812 in-spec
@@ -459,6 +489,10 @@ def selftest():
     assert r[8]["result"]["resultType"] == "complete"
     assert json.loads(r[8]["result"]["content"][0]["text"])["ok"] is True    # same tool, modern era
     assert r[9]["error"]["code"] == -32022 and r[9]["error"]["data"]["supported"] == [MODERN_VERSION]
+    assert r[10]["result"]["isError"] is True       # missing tool name -> error result
+    assert r[11]["result"]["isError"] is True       # non-object arguments -> error result
+    assert r[12]["result"]["isError"] is True       # non-string tool name -> error result
+    assert json.loads(r[13]["result"]["content"][0]["text"])["ok"] is True   # still alive after all that
 
     hdrs = {"MCP-Protocol-Version": MODERN_VERSION, "Mcp-Method": "tools/call",
             "Mcp-Name": "judge_serial"}
