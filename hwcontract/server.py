@@ -25,6 +25,7 @@ from hwcontract import __version__
 from hwcontract.judge import (load_contract, run, run_serial, render,
                               evidence, sha256_of)
 from hwcontract.sigrok_adapter import capture, observe
+from hwcontract.temporal import judge_events, render_events
 from hwcontract import serial_adapter
 
 MODERN_VERSION = "2026-07-28"
@@ -107,6 +108,16 @@ def tool_judge_serial(contract_path, log):
     return _summarize(results, ok, evidence(path,
                                             log_sha256=sha256_of(log),
                                             log_chars=len(log)))
+
+
+def tool_judge_events(contract_path, events):
+    path = _path(contract_path)
+    results, ok = judge_events(load_contract(path), events)
+    out = {"ok": ok, "verdict": "PASS" if ok else "FAIL", "results": results,
+           "table": render_events(results),
+           "evidence": evidence(path, events_sha256=sha256_of(events),
+                                event_count=len(events))}
+    return out
 
 
 def _capture(driver, channel, samplerate, samples):
@@ -201,6 +212,16 @@ TOOLS = {
         "schema": {"type": "object",
                    "properties": {"contract_path": _STR, "log": _STR},
                    "required": ["contract_path", "log"]},
+    },
+    "judge_events": {
+        "fn": tool_judge_events,
+        "description": "Judge decoded hardware events against an events contract's "
+                       "temporal assertions (when/require/within, forbid/while/before). "
+                       "Events: [{source, type, start_ns, end_ns, fields}].",
+        "schema": {"type": "object",
+                   "properties": {"contract_path": _STR,
+                                  "events": {"type": "array", "items": {"type": "object"}}},
+                   "required": ["contract_path", "events"]},
     },
     "check_serial": {
         "fn": tool_check_serial,
@@ -493,6 +514,15 @@ def selftest():
          "params": {"name": "judge_serial", "arguments": "oops"}},
         {"jsonrpc": "2.0", "id": 12, "method": "tools/call", "params": {"name": 123}},
         call(13, "judge_serial", contract_path=ex("boot.contract.yaml"), log=good_log),
+        call(14, "judge_events", contract_path=ex("spi-frame.contract.yaml"), events=[
+            {"source": "gpio", "type": "cs", "start_ns": 1000, "end_ns": 1000, "fields": {"value": 0}},
+            {"source": "spi0", "type": "clock_edge", "start_ns": 1200, "end_ns": 1205, "fields": {"value": 1}},
+            {"source": "gpio", "type": "change", "start_ns": 1100, "end_ns": 1100, "fields": {"line": "mosi"}},
+            {"source": "gpio", "type": "cs", "start_ns": 3000, "end_ns": 6000, "fields": {"value": 1}},
+            {"source": "gpio", "type": "cs", "start_ns": 6000, "end_ns": 6000, "fields": {"value": 0}},
+            {"source": "spi0", "type": "clock_edge", "start_ns": 6200, "end_ns": 6205, "fields": {"value": 1}},
+            {"source": "gpio", "type": "change", "start_ns": 6100, "end_ns": 6100, "fields": {"line": "mosi"}},
+        ]),
     ]
     raw = "\n".join([json.dumps(m) for m in msgs] + ['{"jsonrpc": broken', "[1, 2, 3]"])
     out = io.StringIO()
@@ -501,7 +531,7 @@ def selftest():
     r = {m["id"]: m for m in responses if m.get("id") is not None}
     strays = [m for m in responses if m.get("id") is None]
 
-    assert len(responses) == 15                     # 13 ids + parse error + non-object request
+    assert len(responses) == 16                     # 14 ids + parse error + non-object request
     assert len(strays) == 2
     assert strays[0]["error"]["code"] == -32700     # malformed JSON -> parse error
     assert strays[1]["error"]["code"] == -32603     # non-object request -> internal error, loop lives
@@ -520,6 +550,9 @@ def selftest():
     assert r[11]["result"]["isError"] is True       # non-object arguments -> error result
     assert r[12]["result"]["isError"] is True       # non-string tool name -> error result
     assert json.loads(r[13]["result"]["content"][0]["text"])["ok"] is True   # still alive after all that
+    body14 = json.loads(r[14]["result"]["content"][0]["text"])
+    assert body14["ok"] is True and body14["verdict"] == "PASS"              # temporal assertions hold
+    assert body14["results"][1]["latency"]["count"] == 2                     # cs->clock latency seen twice
 
     hdrs = {"MCP-Protocol-Version": MODERN_VERSION, "Mcp-Method": "tools/call",
             "Mcp-Name": "judge_serial"}

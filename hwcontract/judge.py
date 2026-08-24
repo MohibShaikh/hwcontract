@@ -40,11 +40,92 @@ VIOLATION_FAIL_PCT = 1.0
 
 _TIMING_KEYS = {"contract", "kind", "unit", "headroom_pct", "edges"}
 _SERIAL_KEYS = {"contract", "kind", "expect", "forbid"}
+_EVENTS_KEYS = {"contract", "kind", "assertions"}
 _EDGE_KEYS = {"name", "min", "typ", "max"}
+_ASSERTION_KEYS = {"name", "when", "require", "within", "forbid", "while", "before"}
 
 
 class ContractError(ValueError):
     """A contract that fails validation. Message lists every problem found."""
+
+
+def parse_duration(value, signed=False):
+    """'80ns' / '2us' / '1.5ms' -> int ns. Bare ints are already ns.
+    signed=True accepts negative values (within-windows that look before the
+    trigger); the default rejects them."""
+    if isinstance(value, bool):
+        raise ValueError(f"invalid duration {value!r}")
+    sign = 1
+    if signed and isinstance(value, str) and value.strip().startswith("-"):
+        sign, value = -1, value.strip()[1:]
+    ns = _unsigned_duration(value)
+    if ns < 0:
+        raise ValueError(f"duration must be >= 0, got {value!r}")
+    return sign * ns
+
+
+def _unsigned_duration(value):
+    if isinstance(value, bool):
+        raise ValueError(f"invalid duration {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"invalid duration {value!r}")
+        return round(value)
+    mult = {"ns": 1, "us": 1_000, "µs": 1_000, "ms": 1_000_000, "s": 1_000_000_000}
+    text = str(value).strip()
+    for unit in ("ns", "us", "µs", "ms", "s"):
+        if text.endswith(unit):
+            num = text[: -len(unit)].strip()
+            try:
+                v = float(num)
+            except ValueError:
+                break
+            if not math.isfinite(v):
+                break
+            return round(v * mult[unit])
+    raise ValueError(f"invalid duration {value!r} (try '80ns', '2us', '1.5ms')")
+
+
+def parse_selector(sel):
+    """'gpio.cs.value=0' -> {source: gpio, type: cs, field: value, value: '0'}
+       'spi0.transfer'  -> {source: spi0, type: transfer}
+       'transfer'       -> {source: None, type: transfer}
+    The last dotted component is the event type; everything before it is the
+    source; a field=value tail filters on event fields."""
+    if not isinstance(sel, str) or not sel.strip():
+        raise ValueError(f"selector must be a non-empty string, got {sel!r}")
+    parts = sel.strip().split(".")
+    field = value = None
+    if "=" in parts[-1]:
+        field, _, value = parts[-1].partition("=")
+        if not field or not value:
+            raise ValueError(f"invalid field filter in selector {sel!r}")
+        parts = parts[:-1]          # the field=value tail is a filter, not a path component
+    if not parts or not all(parts):
+        raise ValueError(f"invalid selector {sel!r}: empty component")
+    source = ".".join(parts[:-1]) or None
+    return {"source": source, "type": parts[-1], "field": field, "value": value}
+
+
+def event_matches(sel, event):
+    if sel["source"] is not None and event.get("source") != sel["source"]:
+        return False
+    if event.get("type") != sel["type"]:
+        return False
+    if sel["field"] is not None:
+        fields = event.get("fields") or {}
+        if sel["field"] not in fields:
+            return False
+        got = fields[sel["field"]]
+        if str(got) != sel["value"]:
+            try:
+                if float(got) != float(sel["value"]):
+                    return False
+            except (TypeError, ValueError):
+                return False
+    return True
 
 
 def _num(value, what, problems):
@@ -60,6 +141,77 @@ def _num(value, what, problems):
     return value
 
 
+def _try(fn, value, problems, what):
+    try:
+        return fn(value)
+    except ValueError as e:
+        problems.append(f"{what}: {e}")
+        return None
+
+
+def _validate_events(contract, problems):
+    """Validate an events contract: selectors parse, durations parse, and each
+    assertion picks a coherent shape (require+within, or forbid+while/before)."""
+    unknown = set(contract) - _EVENTS_KEYS
+    if unknown:
+        problems.append(f"unknown keys for an events contract: {sorted(unknown)}")
+    assertions = contract.get("assertions")
+    if not isinstance(assertions, list) or not assertions:
+        problems.append("'assertions' must be a non-empty list")
+        return
+    seen = set()
+    for i, a in enumerate(assertions):
+        label = f"assertions[{a.get('name', i) if isinstance(a, dict) else i}]"
+        if not isinstance(a, dict):
+            problems.append(f"{label} must be a mapping")
+            continue
+        unknown = set(a) - _ASSERTION_KEYS
+        if unknown:
+            problems.append(f"{label} has unknown keys: {sorted(unknown)}")
+        name = a.get("name")
+        if not isinstance(name, str) or not name.strip():
+            problems.append(f"{label}.name must be a non-empty string")
+        elif name in seen:
+            problems.append(f"duplicate assertion name: {name!r}")
+        else:
+            seen.add(name)
+        when = None
+        has_require, has_forbid = "require" in a, "forbid" in a
+        standalone = has_forbid and "while" in a
+        if has_require == has_forbid:
+            problems.append(f"{label}: exactly one of 'require' or 'forbid' is required")
+        if standalone and "when" in a:
+            problems.append(f"{label}: 'when' has no effect with forbid+while; drop 'when' or use 'before'")
+        if not standalone:
+            when = _try(parse_selector, a.get("when"), problems, f"{label}.when")
+        if "within" in a and not has_require:
+            problems.append(f"{label}: 'within' needs 'require'")
+        if "while" in a and not has_forbid:
+            problems.append(f"{label}: 'while' needs 'forbid'")
+        if "before" in a and not has_forbid:
+            problems.append(f"{label}: 'before' needs 'forbid'")
+        if "while" in a and "before" in a:
+            problems.append(f"{label}: 'while' and 'before' are mutually exclusive")
+        if has_require:
+            _try(parse_selector, a.get("require"), problems, f"{label}.require")
+            within = a.get("within")
+            if within is not None:
+                if (not isinstance(within, list) or len(within) != 2):
+                    problems.append(f"{label}.within must be [min, max]")
+                else:
+                    signed = lambda v: parse_duration(v, signed=True)
+                    lo = _try(signed, within[0], problems, f"{label}.within[0]")
+                    hi = _try(signed, within[1], problems, f"{label}.within[1]")
+                    if lo is not None and hi is not None and lo > hi:
+                        problems.append(f"{label}.within: min {lo} > max {hi}")
+        if has_forbid:
+            _try(parse_selector, a.get("forbid"), problems, f"{label}.forbid")
+            if "while" in a:
+                _try(parse_selector, a.get("while"), problems, f"{label}.while")
+            if "before" in a:
+                _try(parse_duration, a.get("before"), problems, f"{label}.before")
+
+
 def validate_contract(contract):
     """Raise ContractError listing every problem, or return the contract untouched."""
     problems = []
@@ -67,8 +219,8 @@ def validate_contract(contract):
         raise ContractError(f"contract must be a mapping, got {type(contract).__name__}")
 
     kind = contract.get("kind", "timing")
-    if kind not in ("timing", "serial"):
-        problems.append(f"kind must be 'timing' or 'serial', got {kind!r}")
+    if kind not in ("timing", "serial", "events"):
+        problems.append(f"kind must be 'timing', 'serial' or 'events', got {kind!r}")
 
     name = contract.get("contract")
     if not isinstance(name, str) or not name.strip():
@@ -93,6 +245,8 @@ def validate_contract(contract):
                     re.compile(pat)
                 except Exception as e:
                     problems.append(f"bad regex {pat!r}: {e}")
+    elif kind == "events":
+        _validate_events(contract, problems)
     else:
         unknown = set(contract) - _TIMING_KEYS
         if unknown:

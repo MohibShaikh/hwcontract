@@ -18,7 +18,7 @@ No contract for your part? Add a YAML. No code change.
 
 ## Tools
 
-- `judge_contract` / `judge_serial`: no hardware, replay a capture or a log
+- `judge_contract` / `judge_serial` / `judge_events`: no hardware, replay a capture, a log, or decoded events
 - `check_ws2812` / `check_dshot`: capture a live line and judge it
 - `check_serial`: read a serial port for N seconds and judge the log
 

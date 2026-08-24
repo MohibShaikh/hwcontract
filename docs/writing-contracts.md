@@ -169,6 +169,68 @@ raw widths (hand-written summaries passed to `judge_contract`) are judged on
 the median alone; the capture tools always carry widths, so live judgments
 always see the tails.
 
+## Event contracts: cross-signal temporal assertions
+
+Pulse-window contracts judge one signal. Event contracts judge the
+relationships *between* decoded events, which is the fault class loopback
+tests cannot see (chip-select asserting after the clock started, MOSI
+changing too close to the sampling edge, a response that never arrives).
+
+Events are normalized dicts, from `sigrok-cli --protocol-decoder-jsontrace`
+or any decoder that emits timestamps:
+
+```json
+{"source": "spi0", "type": "clock_edge", "start_ns": 184020, "end_ns": 184025,
+ "fields": {"value": 1}}
+```
+
+```yaml
+contract: spi-frame
+kind: events
+assertions:
+  - name: cs-precedes-first-clock
+    when: spi0.clock_edge.value=1    # trigger: each sampling edge
+    require: gpio.cs.value=0         # CS must already be asserted...
+    within: [-10us, 0ns]             # ...before the edge (negative = look back)
+  - name: no-clock-outside-frame
+    forbid: spi0.clock_edge          # no clocking...
+    while: gpio.cs.value=1           # ...while the frame is deselected
+  - name: mosi-setup
+    when: spi0.clock_edge.value=1
+    forbid: gpio.change
+    before: 20ns                     # no MOSI change in the 20ns before an edge
+```
+
+Selector grammar: the last dotted component is the event type, everything
+before it is the source, and a `field=value` tail filters event fields.
+`gpio.cs.value=0` is source `gpio`, type `cs`, field `value` equal to 0.
+A selector like `gpio.mosi.change` means source `gpio.mosi`, type `change`;
+that reads naturally and means something different, so check the parse with
+`parse_selector` when a forbid passes suspiciously cleanly. A forbid that
+never appears anywhere in the trace says so in its hint.
+
+Three assertion shapes:
+
+- `when` + `require` + `within`: every trigger must see a matching event in
+  the window. Negative window bounds look backward. The verdict reports the
+  measured trigger-to-response latency distribution (min/p50/p95/p99/max).
+- `forbid` + `while`: no forbidden event may overlap a while-event's
+  [start_ns, end_ns] span. The while-events need real durations.
+- `when` + `forbid` + `before`: no forbidden event may start in the
+  `before` window preceding each trigger. This is the setup-time check.
+
+Every trigger is checked, not a sample. Zero triggers fails: a contract
+that never fires proves nothing. Violations name the first failure with its
+exact timestamps, so the trace window is one search away.
+
+Judge from the command line:
+
+```bash
+sigrok-cli -i capture.sr -P spi:clk=D0:mosi=D1:cs=D2 -A spi \
+    --protocol-decoder-jsontrace > trace.json
+python3 -m hwcontract.temporal spi-frame.contract.yaml trace.json
+```
+
 ## The capture-window pitfall
 
 Serial capture is a time box. `serial_adapter.py` reads the port for N seconds

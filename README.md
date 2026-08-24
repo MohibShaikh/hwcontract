@@ -131,10 +131,24 @@ package under `hwcontract/examples/`.
 |------|-----------|--------------|
 | `judge_contract` | no | Judge given observations against a timing contract. Replay / testing. |
 | `judge_serial` | no | Judge a given log string against a serial contract's expect/forbid. |
+| `judge_events` | no | Judge decoded events against temporal assertions (when/require/within, forbid/while/before). |
 | `check_ws2812` | yes | Capture a live WS2812 line **and** judge it, one call. |
 | `check_dshot` | yes | Same, for a DShot600 ESC signal. |
 | `capture_ws2812` | yes | Just capture → observations (no judging). |
 | `check_serial` | yes | Read a serial port for N seconds and judge the log. |
+
+Event contracts are the SVA-style layer: relationships between decoded
+events, checked for every occurrence, with latency distributions and
+first-failure timestamps. Feed them `sigrok-cli --protocol-decoder-jsontrace`
+output and judge from the CLI:
+
+```bash
+python3 -m hwcontract.temporal spi-frame.contract.yaml trace.json
+```
+
+The bundled `spi-frame.contract.yaml` catches the Zephyr LPSPI class of bug
+(CS asserting after SCK starts, MOSI setup collapse) that loopback tests
+cannot see.
 
 Prefer plain pytest over MCP? [`pytest-hwcontract`](pytest-hwcontract/) is a
 plugin that turns verdicts into tests: a FAIL, MARGINAL or MISSING edge fails
