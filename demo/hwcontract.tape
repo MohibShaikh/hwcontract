@@ -29,6 +29,11 @@ Enter
 Sleep 4s
 Sleep 2s
 
+# the temporal engine: one DMA-broken SPI frame in a hundred
+Type "uv run python3 demo/spi_dma_temporal.py"
+Enter
+Sleep 4s
+
 # judge a serial boot log the same way
 Type "cat hwcontract/examples/esp32.contract.yaml"
 Enter

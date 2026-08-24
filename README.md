@@ -55,6 +55,28 @@ Same hardware, two contracts: the generic one fails, the chip-specific one
 passes. A WS2812B isn't a WS2812. Measure the real signal, hold it to a spec, and
 match the contract to the actual chip.
 
+## See the temporal engine catch a DMA bug
+
+```bash
+python3 demo/spi_dma_temporal.py
+```
+
+100 synthesized SPI frames, judged against the bundled `spi-frame` contract.
+Frame 77 has the Zephyr LPSPI DMA fault: chip-select asserts after the clock
+starts. Frame 42 settles MOSI 10ns before the sampling edge. Both come back
+with exact timestamps, and the same broken stream is re-judged through the
+sigrok jsontrace importer:
+
+```
+cs-precedes-first-clock  800  1  FAIL  trigger at 1540300ns: no gpio.cs.value=0
+                                          in [1530300ns, 1540300ns] (first of 1)
+mosi-setup               800  1  FAIL  forbidden gpio.change at 843290ns is 10ns
+                                          before spi0.clock_edge.value=1 at 843300ns
+```
+
+The data is perfect in all 100 frames; a loopback test passes. The ordering is
+broken in two, and only a cross-signal assertion notices.
+
 ## What you get
 
 - **28 bundled contracts** for the parts people actually use: WS2812/WS2813/
