@@ -150,6 +150,25 @@ Verify with the parse, not the eye:
 python3 -c "import yaml; print(yaml.safe_load(open('hwcontract/examples/boot.contract.yaml'))['expect'])"
 ```
 
+## Distributions and outliers
+
+A capture is not one number per edge. The adapter measures every pulse and the
+observation carries the full distribution: `count`, `min`, `max`, `p5`, `p50`,
+`p95`, `jitter` (p95 minus p5), plus the raw `widths`. The judge checks every
+pulse against the window, not just the median:
+
+- All pulses in window, median comfortable: `PASS`.
+- Median in spec but a few pulses outside: `MARGINAL`, with the count in the
+  hint ("3 of 1200 pulses out of window (0.25%)").
+- More than 1% of pulses outside the window: `FAIL`, even when the median sits
+  dead on typ. A driver that glitches one bit in a hundred is not a driver
+  you ship.
+
+The 1% threshold is `VIOLATION_FAIL_PCT` in `judge.py`. Observations without
+raw widths (hand-written summaries passed to `judge_contract`) are judged on
+the median alone; the capture tools always carry widths, so live judgments
+always see the tails.
+
 ## The capture-window pitfall
 
 Serial capture is a time box. `serial_adapter.py` reads the port for N seconds
@@ -263,3 +282,6 @@ python3 -m hwcontract.serial_adapter --demo
 - Known-good capture passes, known-bad capture fails the right edges.
 - Headers comment the part's quirks and the sources of the numbers.
 - `pytest` passes: the suite validates every bundled contract.
+- Every verdict carries evidence: contract hash, capture hash, capture
+  parameters, tool version, timestamp. Keep those bundles; they are your
+  regression record.

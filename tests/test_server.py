@@ -118,3 +118,18 @@ def test_marginal_contract_fails_over_tool_verdict():
 def test_initialize_handshake_unchanged():
     resp = serve_lines([json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})])[0]
     assert resp["result"]["protocolVersion"] == LEGACY_VERSIONS[0]
+
+
+def test_verdicts_carry_evidence():
+    obs = [{"name": "T0H", "value": 350}, {"name": "T0L", "value": 800},
+           {"name": "T1H", "value": 700}, {"name": "T1L", "value": 600},
+           {"name": "RESET", "value": 60000}]
+    resp = serve_lines([json.dumps(frame(name="judge_contract",
+                                         arguments={"contract_path": os.path.join(EX, "ws2812.contract.yaml"),
+                                                    "observations": obs}))])[0]
+    _, body = call_result(resp)
+    assert body["verdict"] == "PASS"
+    ev = body["evidence"]
+    assert ev["contract_sha256"] and len(ev["contract_sha256"]) == 64
+    assert ev["observation_count"] == 5
+    assert ev["observations_sha256"] and ev["hwcontract_version"]

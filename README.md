@@ -14,6 +14,15 @@ can act on:
   cold board in the field. It fails the verdict: the judge will not ship it.
 - **fail**: out of spec, with the measured value and how far off it is
 
+Two things a green verdict gives you beyond the table:
+
+- **Every pulse is judged, not just the median.** Captures carry the full
+  pulse distribution; a glitchy tail that a median hides comes back as
+  marginal or fail, with the violating-pulse count in the hint.
+- **Evidence on every verdict:** contract hash, capture hash, capture
+  parameters, tool version, timestamp. A green build in CI traces back to the
+  exact bytes that produced it.
+
 No hardware in your hand? The demo below runs the whole thing on a real recorded
 signal, so you can see exactly what you get before wiring anything up.
 

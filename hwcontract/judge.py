@@ -10,10 +10,12 @@ MARGINAL is in spec but rail-hugging; it makes the overall verdict fail.
 Contracts are validated on load (validate_contract): a malformed contract is
 a ContractError with every problem listed, never a KeyError mid-judgment.
 """
+import hashlib
 import json
 import math
 import os
 import sys
+from datetime import datetime, timezone
 from functools import lru_cache
 
 import yaml
@@ -23,11 +25,18 @@ try:                       # prefer google-re2 (pip install google-re2): linear-
 except ImportError:
     import re              # stdlib fallback; the input cap in run_serial bounds ReDoS
 
+from hwcontract import __version__
+
 PASS, MARGINAL, FAIL, MISSING = "PASS", "MARGINAL", "FAIL", "MISSING"
 
 # A serial capture longer than this is truncated before matching: bounds memory
 # and the ReDoS blast radius under stdlib re.
 SERIAL_CAP = 1_000_000
+
+# An observation carrying raw pulse widths ("widths") is judged on every pulse,
+# not just the median. Up to this fraction of violating pulses keeps the edge
+# MARGINAL (p50 in spec, tails out); beyond it the edge FAILs outright.
+VIOLATION_FAIL_PCT = 1.0
 
 _TIMING_KEYS = {"contract", "kind", "unit", "headroom_pct", "edges"}
 _SERIAL_KEYS = {"contract", "kind", "expect", "forbid"}
@@ -140,27 +149,75 @@ def load_contract(path):
     return _load(path, os.path.getmtime(path))
 
 
+def sha256_of(data):
+    """Content hash of bytes or any JSON-able object (canonical, sort_keys)."""
+    if not isinstance(data, (bytes, bytearray)):
+        data = json.dumps(data, sort_keys=True).encode()
+    return hashlib.sha256(data).hexdigest()
+
+
+def evidence(contract_path, **extra):
+    """The reproducibility block attached to every verdict: what was judged,
+    against what, with which tool. Content-addressed so a green build in CI
+    can be traced back to the exact contract and capture bytes."""
+    ev = {"hwcontract_version": __version__,
+          "contract_sha256": sha256_of(open(contract_path, "rb").read()),
+          "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    ev.update(extra)
+    return ev
+
+
+def _violations(edge, obs):
+    """(count, pct) of raw pulses outside the window, or (None, None) when the
+    observation carries no raw widths (summary-only: median-only judging)."""
+    widths = obs.get("widths")
+    if not widths:
+        return None, None
+    lo, hi = edge["min"], edge["max"]
+    bad = sum(1 for w in widths if w < lo or (hi is not None and w > hi))
+    return bad, round(100.0 * bad / len(widths), 2)
+
+
 def judge(edge, obs, headroom_pct):
-    """(status, hint) for one edge given its observation (or None)."""
+    """(status, hint) for one edge given its observation (or None).
+
+    An observation with raw widths is judged on EVERY pulse, not just the
+    median: a glitchy tail escalates a clean-looking p50. Up to
+    VIOLATION_FAIL_PCT percent of violating pulses keeps the edge MARGINAL;
+    beyond that it FAILs outright."""
     if obs is None:
         return MISSING, "no observation for this edge"
 
-    v, lo, hi, typ = obs["value"], edge["min"], edge["max"], edge["typ"]
+    v = obs.get("p50", obs.get("value"))
+    lo, hi, typ = edge["min"], edge["max"], edge["typ"]
+    violations, pct = _violations(edge, obs)
+    vhint = ""
+    if violations:
+        vhint = f"; {violations} of {len(obs['widths'])} pulses out of window ({pct}%)"
 
     if not math.isfinite(v):
-        return FAIL, "non-finite measurement (NaN/inf) in the capture"
+        return FAIL, "non-finite measurement (NaN/inf) in the capture" + vhint
 
     if v < lo or (hi is not None and v > hi):
         short = typ - v
-        return FAIL, f"{abs(short)}ns {'short' if short > 0 else 'long'} (typ {typ})"
+        return FAIL, f"{abs(short)}ns {'short' if short > 0 else 'long'} (typ {typ})" + vhint
+
+    if violations and pct > VIOLATION_FAIL_PCT:
+        return FAIL, "p50 in spec but the capture violates the window" + vhint
 
     if hi is not None:                                  # flag rail-hugging (marginal)
         threshold = headroom_pct / 100 * (hi - lo)
         if min(v - lo, hi - v) < threshold:
             near = "min" if v - lo < hi - v else "max"
-            return MARGINAL, f"only {min(v - lo, hi - v)}ns from {near}; nudge toward typ {typ}"
+            return MARGINAL, f"only {min(v - lo, hi - v)}ns from {near}; nudge toward typ {typ}" + vhint
+
+    if violations:
+        return MARGINAL, "p50 in spec but individual pulses violate the window" + vhint
 
     return PASS, ""
+
+
+_DIST_KEYS = ("count", "min", "max", "p5", "p95", "jitter")
 
 
 def run(contract, observations):
@@ -172,9 +229,17 @@ def run(contract, observations):
         status, hint = judge(edge, obs, contract["headroom_pct"])
         if status != PASS:
             ok = False
-        results.append({"edge": edge["name"], "typ": edge["typ"],
-                        "actual": obs["value"] if obs else None,
-                        "status": status, "hint": hint})
+        row = {"edge": edge["name"], "typ": edge["typ"],
+               "actual": obs.get("p50", obs.get("value")) if obs else None,
+               "status": status, "hint": hint}
+        if obs:
+            for k in _DIST_KEYS:                        # distribution summary rides along
+                if k in obs:
+                    row[k] = obs[k]
+            violations, pct = _violations(edge, obs)
+            if violations is not None:
+                row["violations"], row["violation_pct"] = violations, pct
+        results.append(row)
     return results, ok
 
 

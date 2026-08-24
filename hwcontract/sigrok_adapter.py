@@ -15,9 +15,9 @@ a threshold (short=0-bit, long=1-bit), and report the median of each -> robust t
 jitter. The thresholds are the calibration knobs: real strips and clone chips vary.
 """
 import json
+import math
 import subprocess
 import sys
-from statistics import median
 
 # calibration knobs (ns). WS2812: 0-bit high ~350, 1-bit high ~700; lows ~800/600.
 HIGH_SPLIT = 525     # high pulse >  this => T1H, else T0H
@@ -38,9 +38,32 @@ def runs(samples, dt_ns):
     return out
 
 
+def _pctl(sorted_vals, p):
+    """Linear-interpolated percentile of an already-sorted list."""
+    if len(sorted_vals) == 1:
+        return float(sorted_vals[0])
+    k = (len(sorted_vals) - 1) * p / 100
+    f, c = math.floor(k), math.ceil(k)
+    if f == c:
+        return float(sorted_vals[int(k)])
+    return sorted_vals[f] * (c - k) + sorted_vals[c] * (k - f)
+
+
+def _distribution(widths):
+    """Summary of one edge's pulse widths: count, spread, percentiles, jitter."""
+    s = sorted(widths)
+    p5, p50, p95 = _pctl(s, 5), _pctl(s, 50), _pctl(s, 95)
+    return {"count": len(s), "min": round(s[0]), "max": round(s[-1]),
+            "p5": round(p5), "p50": round(p50), "p95": round(p95),
+            "jitter": round(p95 - p5), "widths": [round(w) for w in s]}
+
+
 def observe(samples, dt_ns, high_split=HIGH_SPLIT, low_split=LOW_SPLIT, reset_ns=RESET_NS):
-    """Bucket pulse widths into bit encodings. Thresholds are the calibration knobs;
-    defaults are WS2812. Pass DShot's splits to reuse this for DShot."""
+    """Bucket pulse widths into bit encodings and summarize each bucket's
+    distribution. The judge checks every pulse against the contract windows,
+    not just the median: a clean p50 with glitchy tails must not pass.
+    Thresholds are the calibration knobs; defaults are WS2812. Pass DShot's
+    splits to reuse this for DShot."""
     all_runs = runs(samples, dt_ns)
     interior = all_runs[1:-1]                        # drop capture-boundary partials for bit widths
     highs = [w for lvl, w in interior if lvl == 1]
@@ -53,8 +76,14 @@ def observe(samples, dt_ns, high_split=HIGH_SPLIT, low_split=LOW_SPLIT, reset_ns
         # RESET scanned across ALL runs so a latch gap at the capture edge isn't lost
         "RESET": [w for lvl, w in all_runs if lvl == 0 and w > reset_ns],
     }
-    return [{"name": k, "value": round(median(v)), "unit": "ns"}
-            for k, v in buckets.items() if v]
+    out = []
+    for k, v in buckets.items():
+        if not v:
+            continue
+        dist = _distribution(v)
+        dist.update({"name": k, "unit": "ns", "value": dist["p50"]})
+        out.append(dist)
+    return out
 
 
 def read_csv(path):

@@ -1,7 +1,7 @@
 [
-  {"name": "T0H",   "value": 340,   "unit": "ns"},
-  {"name": "T0L",   "value": 810,   "unit": "ns"},
-  {"name": "T1H",   "value": 520,   "unit": "ns"},
-  {"name": "T1L",   "value": 470,   "unit": "ns"},
-  {"name": "RESET", "value": 62000, "unit": "ns"}
+  {"name": "T0H", "unit": "ns", "value": 340, "count": 3, "min": 333, "max": 347, "p5": 333, "p50": 340, "p95": 347, "jitter": 14, "widths": [333, 340, 347]},
+  {"name": "T0L", "unit": "ns", "value": 810, "count": 3, "min": 800, "max": 820, "p5": 800, "p50": 810, "p95": 820, "jitter": 20, "widths": [800, 810, 820]},
+  {"name": "T1H", "unit": "ns", "value": 700, "count": 3, "min": 694, "max": 706, "p5": 694, "p50": 700, "p95": 706, "jitter": 12, "widths": [694, 700, 706]},
+  {"name": "T1L", "unit": "ns", "value": 600, "count": 3, "min": 592, "max": 608, "p5": 592, "p50": 600, "p95": 608, "jitter": 16, "widths": [592, 600, 608]},
+  {"name": "RESET", "unit": "ns", "value": 62000, "count": 1, "min": 62000, "max": 62000, "p5": 62000, "p50": 62000, "p95": 62000, "jitter": 0, "widths": [62000]}
 ]

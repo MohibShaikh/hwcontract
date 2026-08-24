@@ -22,7 +22,8 @@ import re
 import sys
 
 from hwcontract import __version__
-from hwcontract.judge import load_contract, run, run_serial, render
+from hwcontract.judge import (load_contract, run, run_serial, render,
+                              evidence, sha256_of)
 from hwcontract.sigrok_adapter import capture, observe
 from hwcontract import serial_adapter
 
@@ -84,51 +85,77 @@ def _int(v, hi, lo=1):
 
 # ---- tool implementations (thin wrappers over the pure core) ----------------
 
-def _summarize(results, ok):
-    return {"ok": ok, "results": results, "table": render(results)}
+def _summarize(results, ok, ev=None):
+    out = {"ok": ok, "verdict": "PASS" if ok else "FAIL",
+           "results": results, "table": render(results)}
+    if ev:
+        out["evidence"] = ev
+    return out
 
 
 def tool_judge_contract(contract_path, observations):
-    return _summarize(*run(load_contract(_path(contract_path)), observations))
+    path = _path(contract_path)
+    results, ok = run(load_contract(path), observations)
+    return _summarize(results, ok, evidence(path,
+                                            observations_sha256=sha256_of(observations),
+                                            observation_count=len(observations)))
 
 
 def tool_judge_serial(contract_path, log):
-    return _summarize(*run_serial(load_contract(_path(contract_path)), log))
+    path = _path(contract_path)
+    results, ok = run_serial(load_contract(path), log)
+    return _summarize(results, ok, evidence(path,
+                                            log_sha256=sha256_of(log),
+                                            log_chars=len(log)))
 
 
 def _capture(driver, channel, samplerate, samples):
     _guard()
+    drv, chan = _tok("driver", driver), _tok("channel", channel)
     sr = _int(samplerate, MAX_SR)
-    return observe(capture(_tok("driver", driver), _tok("channel", channel),
-                           sr, _int(samples, MAX_SAMPLES)), 1e9 / sr), sr
+    raw = capture(drv, chan, sr, _int(samples, MAX_SAMPLES))
+    cap_ev = {"driver": drv, "channel": chan,
+              "samplerate_hz": sr, "samples": len(raw),
+              "capture_sha256": sha256_of("".join(map(str, raw)))}
+    return observe(raw, 1e9 / sr), cap_ev
 
 
 def tool_capture_ws2812(driver="fx2lafw", channel="D0",
                         samplerate=24_000_000, samples=200_000):
-    obs, _ = _capture(driver, channel, samplerate, samples)
-    return {"observations": obs}
+    obs, cap_ev = _capture(driver, channel, samplerate, samples)
+    return {"observations": obs, "capture": cap_ev}
 
 
 def tool_check_ws2812(contract_path, driver="fx2lafw", channel="D0",
                       samplerate=24_000_000, samples=200_000):
-    obs, _ = _capture(driver, channel, samplerate, samples)
-    return _summarize(*run(load_contract(_path(contract_path)), obs))
+    obs, cap_ev = _capture(driver, channel, samplerate, samples)
+    return _summarize(*run(load_contract(_path(contract_path)), obs),
+                      evidence(_path(contract_path), **cap_ev))
 
 
 def tool_check_dshot(contract_path, driver="fx2lafw", channel="D0",
                      samplerate=24_000_000, samples=200_000):
     _guard()
     sr = _int(samplerate, MAX_SR)
-    obs = observe(capture(_tok("driver", driver), _tok("channel", channel),
-                          sr, _int(samples, MAX_SAMPLES)), 1e9 / sr, **DSHOT600)
-    return _summarize(*run(load_contract(_path(contract_path)), obs))
+    raw = capture(_tok("driver", driver), _tok("channel", channel),
+                  sr, _int(samples, MAX_SAMPLES))
+    obs = observe(raw, 1e9 / sr, **DSHOT600)
+    cap_ev = {"driver": _tok("driver", driver), "channel": _tok("channel", channel),
+              "samplerate_hz": sr, "samples": len(raw), "protocol": "dshot600",
+              "capture_sha256": sha256_of("".join(map(str, raw)))}
+    return _summarize(*run(load_contract(_path(contract_path)), obs),
+                      evidence(_path(contract_path), **cap_ev))
 
 
 def tool_check_serial(contract_path, port, baud=115200, seconds=3.0):
     _guard()
     log = serial_adapter.capture(_tok("port", port), _int(baud, 4_000_000, 50),
                                  min(float(seconds), MAX_SECONDS))
-    return _summarize(*run_serial(load_contract(_path(contract_path)), log))
+    return _summarize(*run_serial(load_contract(_path(contract_path)), log),
+                      evidence(_path(contract_path), port=_tok("port", port),
+                               baud=_int(baud, 4_000_000, 50),
+                               seconds=min(float(seconds), MAX_SECONDS),
+                               log_sha256=sha256_of(log), log_chars=len(log)))
 
 
 _NUM = {"type": "number"}

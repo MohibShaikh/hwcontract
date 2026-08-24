@@ -50,5 +50,6 @@ forbid: ["panic", "Guru Meditation"]
 - **Chip-specific.** Two vendors, two contracts. A WS2812B isn't a WS2812.
 - **Datasheet vs reality.** Clones drift. If a contract fails identically on real hardware, the datasheet may be wrong; measure, then widen the window.
 - **Escaping.** Contract regexes are YAML strings; doubled backslashes become singles. Test against a real log.
-- **Marginal is a fail.** Do not ship it.
+- **Marginal is a fail.** The judge enforces it: any MARGINAL edge fails the verdict.
+- **Medians hide glitches.** Captures carry raw pulse distributions; over 1% of pulses outside a window fails the edge even when the median passes.
 - **Capture window.** A boot banner prints once at power-on; reset the board during capture.
