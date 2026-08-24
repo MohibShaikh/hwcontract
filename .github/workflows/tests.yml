@@ -15,6 +15,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -e .[dev]
       - run: pytest -q
+      - run: pip install -e ./pytest-hwcontract --no-deps
+      - run: pytest pytest-hwcontract/tests -q
       - run: python3 -m hwcontract.server --selftest
       - run: python3 -m hwcontract.judge --demo
       - run: python3 -m hwcontract.sigrok_adapter --demo

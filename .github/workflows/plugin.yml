@@ -1,0 +1,40 @@
+name: plugin
+
+on:
+  push:
+    branches: [main]
+    tags: ["pytest-v*"]
+    paths: ["pytest-hwcontract/**", ".github/workflows/plugin.yml"]
+  pull_request:
+    paths: ["pytest-hwcontract/**", ".github/workflows/plugin.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e .[dev]
+      - run: pip install -e ./pytest-hwcontract --no-deps
+      - run: pytest pytest-hwcontract/tests -q
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/pytest-v')
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # pypi trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+        working-directory: pytest-hwcontract
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: pytest-hwcontract/dist

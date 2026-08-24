@@ -136,6 +136,10 @@ package under `hwcontract/examples/`.
 | `capture_ws2812` | yes | Just capture → observations (no judging). |
 | `check_serial` | yes | Read a serial port for N seconds and judge the log. |
 
+Prefer plain pytest over MCP? [`pytest-hwcontract`](pytest-hwcontract/) is a
+plugin that turns verdicts into tests: a FAIL, MARGINAL or MISSING edge fails
+the test with the verdict table in the message, JUnit included.
+
 ## How it fits together
 
 ```

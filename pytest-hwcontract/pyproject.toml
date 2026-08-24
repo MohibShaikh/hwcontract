@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pytest-hwcontract"
+version = "0.1.0"
+description = "pytest integration for hwcontract: judge hardware timing and serial captures as tests"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "hwcontract authors" }]
+keywords = ["pytest", "hardware", "embedded", "logic-analyzer", "ws2812", "dshot"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Framework :: Pytest",
+  "Topic :: Software Development :: Testing",
+  "Topic :: System :: Hardware",
+]
+dependencies = ["pytest>=7", "hwcontract>=0.3"]
+
+[project.entry-points.pytest11]
+hwcontract = "pytest_hwcontract.plugin"
+
+[tool.setuptools]
+packages = ["pytest_hwcontract"]

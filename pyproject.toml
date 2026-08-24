@@ -33,3 +33,6 @@ packages = ["hwcontract"]
 
 [tool.setuptools.package-data]
 hwcontract = ["examples/*.yaml", "examples/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]          # the plugin has its own suite under pytest-hwcontract/
