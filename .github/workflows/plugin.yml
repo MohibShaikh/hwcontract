@@ -27,7 +27,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/pytest-v')
     needs: test
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: pypi-plugin
     permissions:
       id-token: write        # pypi trusted publishing (OIDC)
     steps:
