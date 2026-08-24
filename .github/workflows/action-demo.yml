@@ -1,0 +1,59 @@
+name: action-demo
+
+on:
+  push:
+    paths: ["action.yml", "action/**", ".github/workflows/action-demo.yml"]
+  pull_request:
+    paths: ["action.yml", "action/**", ".github/workflows/action-demo.yml"]
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Make one clean capture and one broken one
+        run: |
+          pip install -e .
+          python3 - <<'EOF'
+          from hwcontract.sigrok_adapter import synth
+          dt = 1e9 / 24_000_000
+
+          def stretch_highs(samples, by=10):
+              out, cur, n = [], samples[0], 0
+              for s in samples:
+                  if s == cur:
+                      n += 1
+                  else:
+                      out.extend([cur] * (n + (by if cur == 1 else 0)))
+                      cur, n = s, 1
+              out.extend([cur] * (n + (by if cur == 1 else 0)))
+              return out
+
+          open("good.csv", "w").write("\n".join(str(s) for s in synth(dt)) + "\n")
+          open("bad.csv", "w").write("\n".join(str(s) for s in stretch_highs(synth(dt))) + "\n")
+          open("boot.log", "w").write("boot v3\nIMU init OK\nready\n")
+          open("panic.log", "w").write("Guru Meditation Error\n")
+          EOF
+      - name: Clean capture and boot log pass
+        uses: ./
+        with:
+          timing: "ws2812=good.csv"
+          serial: "boot=boot.log"
+          junit: junit-pass.xml
+      - name: Stretched capture and panicking board fail
+        id: bad
+        continue-on-error: true
+        uses: ./
+        with:
+          timing: "ws2812=bad.csv"
+          serial: "boot=panic.log"
+          junit: junit-fail.xml
+      - name: The broken run must have failed and reported FAIL
+        run: |
+          test "${{ steps.bad.outputs.verdict }}" = "FAIL"
+          grep -q 'failures="2"' junit-fail.xml
+          grep -q 'failures="0"' junit-pass.xml
+          echo "action selftest OK: good PASS, bad FAIL, junit written"

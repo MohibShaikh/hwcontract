@@ -140,6 +140,24 @@ Prefer plain pytest over MCP? [`pytest-hwcontract`](pytest-hwcontract/) is a
 plugin that turns verdicts into tests: a FAIL, MARGINAL or MISSING edge fails
 the test with the verdict table in the message, JUnit included.
 
+## Gate CI on it
+
+The repo ships a GitHub Action, so captures checked into the repo get judged
+on every PR:
+
+```yaml
+- uses: MohibShaikh/hwcontract@v0
+  with:
+    timing: "ws2812b=captures/strip.csv"     # contract=capture-glob, bundled names work
+    serial: "boot=logs/boot.log"
+    samplerate: 24000000                     # for CSV captures (0/1 per line)
+    junit: hwcontract-junit.xml              # shows in the tests tab
+```
+
+A FAIL, MARGINAL or MISSING edge fails the step, annotates the failing line,
+and writes JUnit. The action self-tests on every push to this repo with one
+clean and one deliberately broken capture.
+
 ## How it fits together
 
 ```
