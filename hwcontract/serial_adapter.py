@@ -9,25 +9,42 @@ Owns no device config beyond baud. It just reads what the port, serial-mcp, or a
 saved log emits. The whole capture window IS the time bound: a pattern seen
 in an N-second capture was seen within N seconds.
 """
+import codecs
+import math
 import sys
 import time
 
+from hwcontract.judge import SERIAL_CAP, validate_serial_log
+
 
 def read_log(path):
-    return open(path, errors="replace").read()
+    with open(path, errors="replace") as f:
+        return validate_serial_log(f.read(SERIAL_CAP + 1))
 
 
 def capture(port, baud=115200, seconds=3.0):
+    if (isinstance(seconds, bool) or not isinstance(seconds, (int, float))
+            or not math.isfinite(seconds) or seconds <= 0):
+        raise ValueError("seconds must be a positive finite number")
     import serial  # optional dep, only for live capture
     ser = serial.Serial(port, baud, timeout=0.1)
     end = time.monotonic() + seconds
     buf = []
+    size = 0
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     try:
         while time.monotonic() < end:
-            buf.append(ser.read(4096).decode(errors="replace"))
+            text = decoder.decode(ser.read(min(4096, SERIAL_CAP - size + 1)))
+            size += len(text)
+            if size > SERIAL_CAP:
+                # Reuse the judge's error; never return a partial capture.
+                validate_serial_log("".join(buf) + text)
+            if text:
+                buf.append(text)
+        buf.append(decoder.decode(b"", final=True))
     finally:
         ser.close()
-    return "".join(buf)
+    return validate_serial_log("".join(buf))
 
 
 def demo():

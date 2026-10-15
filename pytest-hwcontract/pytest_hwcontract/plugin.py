@@ -70,6 +70,7 @@ class HwContract:
 
     def timing(self, contract, observations):
         """Judge pulse-width observations against a timing contract."""
+        self.evidence = None
         path = self.resolve(contract)
         results, ok = run(load_contract(path), observations)
         return self._judge(path, results, ok, "observations",
@@ -77,6 +78,7 @@ class HwContract:
 
     def serial(self, contract, log):
         """Judge a serial log against expect/forbid patterns."""
+        self.evidence = None
         path = self.resolve(contract)
         results, ok = run_serial(load_contract(path), log)
         return self._judge(path, results, ok, "log", sha256_of(log), render(results))
@@ -85,6 +87,7 @@ class HwContract:
         """Judge decoded events against an events contract. `trace` is a
         jsontrace JSON file/path (sigrok-cli --protocol-decoder-jsontrace)
         or an already-loaded event list."""
+        self.evidence = None
         path = self.resolve(contract)
         doc = trace
         if isinstance(trace, str):
@@ -98,8 +101,9 @@ class HwContract:
 
     def capture_csv(self, path, samplerate, **splits):
         """Turn a 0/1-per-line logic capture into timing observations."""
-        from hwcontract.sigrok_adapter import observe, read_csv
-        return observe(read_csv(path), 1e9 / int(samplerate), **splits)
+        from hwcontract.sigrok_adapter import observe, read_csv, sample_period
+        dt_ns = sample_period(samplerate)
+        return observe(read_csv(path), dt_ns, **splits)
 
 
 def from_traceevents(doc):
