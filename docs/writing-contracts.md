@@ -1,9 +1,12 @@
 # Writing a contract
 
 A contract is one YAML file that says what correct looks like on the wire.
-It lives in `hwcontract/examples/`, ships with the package, and the judges
-evaluate it without touching hardware. The 28 bundled contracts are the
-reference library: pick the closest part, copy it, adjust the numbers.
+Keep project contracts in your project; the 28 templates in
+`hwcontract/examples/` ship with the package. The judges evaluate observations
+without touching hardware. Discover the library with `hwcontract --list-contracts`
+or the MCP `list_contracts` tool, then verify the closest template's numbers
+against your part. The list reports capture requirements as well as names:
+a bundled template does not imply a working protocol capture adapter.
 
 Three kinds of contracts exist, judged by three different tools:
 
@@ -16,8 +19,11 @@ Three kinds of contracts exist, judged by three different tools:
 The `kind` line selects which schema validates the file, and the MCP tool
 you call picks the judge: `judge_contract` runs the edge table,
 `judge_serial` runs expect/forbid, `judge_events` runs temporal assertions.
-A serial contract without `kind: serial` still judges fine, but the label
-keeps the file self-describing and validation strict.
+Use explicit `kind: serial` or `kind: events` for those schemas; timing is the
+default. The judges reject the wrong contract kind instead of returning an
+empty or misleading verdict. `check_ws2812` and `check_dshot` only capture
+WS2812-family and DShot600 pulse buckets, respectively; they are not generic
+capture tools for every timing template in the table.
 
 ## Timing contract anatomy
 
@@ -82,9 +88,13 @@ Names must match what the adapter emits. The shared timing adapter in
 - `T0H`, `T1H`, `T1L`, `T0L`, `RESET` for WS2812-family and DShot, with the
   per-protocol split thresholds passed in.
 
-A protocol with its own adapter picks its own names. `servo.contract.yaml`
+Other protocols need a custom observation adapter that picks matching names. `servo.contract.yaml`
 uses `PULSE_MIN`, `PULSE_NEUTRAL`, `PULSE_MAX`, `FRAME`; `hc-sr04.contract.yaml`
-uses `TRIG`, `ECHO`, `CYCLE`.
+uses `TRIG`, `ECHO`, `CYCLE`. Neither adapter is included. The same applies to
+I2C, NEC IR, DS18B20/DHT, stepper and PWM-fan timing templates. DShot150/300/1200
+can use the shared bucketing API with rate-specific split/reset thresholds;
+`check_dshot` itself is fixed to DShot600. Add YAML alone only when an existing
+adapter already emits all required observations.
 
 A misspelled edge never matches an observation and reports `MISSING: no
 observation for this edge`, which fails the judgment. That is the behavior you
@@ -120,8 +130,8 @@ forbid:
 
 `expect` patterns must each match somewhere in the log. `forbid` patterns must
 match nowhere. A broken forbid regex fails closed (`judge.py`): if the pattern
-itself errors, the edge fails. The log is capped at 1,000,000 chars before
-matching. With `google-re2` installed (the `untrusted` extra) matching is
+itself errors, the edge fails. Logs longer than 1,000,000 characters are
+rejected with an error; no suffix is silently discarded before matching. With `google-re2` installed (the `untrusted` extra) matching is
 linear-time and contracts can be untrusted; with stdlib re keep patterns
 simple.
 
@@ -234,13 +244,95 @@ Every trigger is checked, not a sample. Zero triggers fails: a contract
 that never fires proves nothing. Violations name the first failure with its
 exact timestamps, so the trace window is one search away.
 
-Judge from the command line:
+### Raw SPI capture to a verdict
+
+The bundled `spi-frame` contract checks **raw transitions**, not decoded bytes.
+For a saved logic capture with D0=SCK, D1=MOSI, D2=active-low CS, export every
+sample with channel labels:
+
+```bash
+sigrok-cli -i capture.sr -C D0,D1,D2 \
+    -O csv:header=false:label=channel:time=false:dedup=false > spi.csv
+```
+
+These [sigrok CSV options](https://github.com/sigrokproject/libsigrok/blob/master/src/output/csv.c)
+keep one row per sample, omit metadata comments, and label channels by name.
+The first row must be `D0,D1,D2`; subsequent rows contain exactly three `0`/`1`
+values. Confirm the wiring and names in your capture; edit the map below if
+they differ. Use a single continuous capture with idle samples before CS
+asserts and samples through CS release. Do not deduplicate rows or concatenate
+discontinuous acquisition windows. Malformed/empty input must be fixed or
+recaptured; do not discard bad rows, which would shift event times.
+
+Run this complete conversion and judgment after `pip install hwcontract`,
+from the directory containing `spi.csv`:
+
+```python
+import json
+from pathlib import Path
+from hwcontract.contracts import EXAMPLES
+from hwcontract.edges import read_multi_csv, edge_events
+from hwcontract.judge import load_contract, sha256_of, verdict, render_verdict
+from hwcontract.temporal import judge_events, render_events
+
+# Set this to the ACTUAL capture sample rate, not the SPI clock rate.
+samplerate_hz = 100_000_000
+channels = read_multi_csv("spi.csv")
+wire_names = {"D0": "spi.sck", "D1": "spi.mosi", "D2": "gpio.cs"}
+if set(channels) != set(wire_names):
+    raise ValueError(f"expected channels {list(wire_names)}, got {list(channels)}")
+events = edge_events({wire_names[k]: v for k, v in channels.items()},
+                     dt_ns=1e9 / samplerate_hz)
+Path("spi.edges.json").write_text(json.dumps(events, indent=2))
+contract_path = str(EXAMPLES / "spi-frame.contract.yaml")
+results, ok = judge_events(load_contract(contract_path), events)
+bundle = verdict(contract_path, results, ok, input_kind="events",
+                 input_sha256=sha256_of(events),
+                 capture_sha256=sha256_of(Path("spi.csv").read_bytes()),
+                 samplerate_hz=samplerate_hz, channel_map=wire_names)
+Path("spi.verdict.json").write_text(json.dumps(bundle, indent=2))
+print(render_verdict(bundle, render_events(results)))
+raise SystemExit(0 if ok else 1)
+```
+
+The 100 MHz example has 10 ns sample spacing. A 24 MHz capture has about
+41.7 ns spacing and cannot establish a 20 ns setup margin. Choose adequate
+capture resolution and adjust the contract's clock polarity, setup and frame
+windows for your device. The template requires a CS falling edge within 10 us
+before **each** rising clock edge and CS release within 4–30 us; it is not a
+universal SPI specification. Keep the raw capture and `spi.verdict.json`.
+`spi.edges.json` is also accepted by MCP `judge_events`, the pytest fixture,
+and the Action's `events` input. For a hardware-free example of this path:
+`python3 -m hwcontract.demo spi`.
+
+### Semantic decoder annotations
+
+For semantic checks, export the real decoder output separately:
 
 ```bash
 sigrok-cli -i capture.sr -P spi:clk=D0:mosi=D1:cs=D2 -A spi \
-    --protocol-decoder-jsontrace > trace.json
-python3 -m hwcontract.temporal spi-frame.contract.yaml trace.json
+    --protocol-decoder-jsontrace > decoded.json
 ```
+
+Inspect what the decoder actually emits:
+
+```python
+from hwcontract.jsontrace import load
+for event in load("decoded.json")[:10]:
+    print(event["source"], event["type"], event["fields"])
+```
+
+For B/E pairs, `pid=spi` and `tid=Data` become source `spi`, type `Data`
+(selector `spi.Data`), with the annotation text in `fields.text`. They do not
+become `spi.sck.rising` or `gpio.cs.falling`. Write a separate events contract
+using the observed decoder row names and semantics, then run:
+
+```bash
+python3 -m hwcontract.temporal my-decoder.contract.yaml decoded.json
+```
+
+The demo's artificial B/E annotations only test the importer. They must not be
+presented as evidence that a real SPI decoder exposes pin transitions.
 
 ## The capture-window pitfall
 
@@ -273,7 +365,7 @@ reset gap, or the frame ends up mid-capture and the reset never appears.
 ## Chip vs clone drift
 
 Contracts are chip-specific. The bundled demo proves it with a real signal:
-`demo/ws2812b_neopixel.py` downloads a genuine 24-LED capture and judges it
+`python3 -m hwcontract.demo ws2812b` downloads a genuine 24-LED capture and judges it
 against two contracts. The generic WS2812 contract fails it on T1L, measured
 417ns against a 450ns minimum, 33ns short. Same wire, same capture, and the
 WS2812B contract passes it. A WS2812B is not a WS2812: shorter lows, different
@@ -296,15 +388,18 @@ comment the file with the reason. If only one board drifts, fix the board.
 A contract is not done until a known-good capture passes it and a known-bad
 one fails the edges you expect.
 
-1. Take a real capture. For WS2812-family, the repo ships one:
+1. Take a real capture. The installed WS2812-family demo downloads a pinned one:
 
 ```bash
-python3 demo/ws2812b_neopixel.py
+python3 -m hwcontract.demo ws2812b
 ```
 
    This downloads the real 24-LED capture, measures it, and judges it against
    the generic and WS2812B contracts. Replace the contract path with yours to
-   see your numbers against real silicon.
+   see your numbers against real silicon. The first run requires network;
+   `--offline` reuses the verified cache. See [provenance and license](../hwcontract/demo-provenance.md).
+   `python3 -m hwcontract.judge --demo` is only a tiny synthetic self-test with
+   an intentionally missing RESET observation, not this recorded replay.
 
 2. Or capture your own and judge it from the command line:
 
@@ -319,14 +414,12 @@ python3 -m hwcontract.judge my.contract.yaml observations.json
 3. Serial contracts, judged the same way the demo tape does:
 
 ```bash
-uv run python3 -c "from hwcontract.judge import load_contract, run_serial, render; \
-c = load_contract('hwcontract/examples/boot.contract.yaml'); \
-log = open('good_boot.log').read(); \
-print(render(run_serial(c, log)[0]))"
+python3 -m hwcontract.demo serial   # offline synthetic PASS/FAIL demonstration
 ```
 
-   Use a log you captured from working hardware, then a log with the failure
-   symptom present. Both verdicts must come out as expected.
+   For your own board, pass a captured log to MCP `judge_serial` with
+   `contract_path="boot"`, or use the pytest fixture's `serial` method. Test
+   a good log and a log with the failure symptom; retain the evidence.
 
 4. Exercise the failure path. Feed observations that violate each edge and
    confirm the hints say what an agent needs to hear: the edge name, the
@@ -342,8 +435,14 @@ python3 -m hwcontract.sigrok_adapter --demo
 python3 -m hwcontract.serial_adapter --demo
 ```
 
-6. Drop the file in `hwcontract/examples/`. It ships in the wheel
-   automatically: `pyproject.toml` packages `examples/*.yaml`.
+6. Keep project-specific contracts in your project. A new bundled template
+   belongs in `hwcontract/examples/` only with a working judge/adapter path
+   and known-good/known-bad capture tests; adding YAML alone does not implement
+   capture support. `pyproject.toml` packages `examples/*.yaml`.
+
+CI replay of unchanged captures checks those recordings and the contract, not
+newly built firmware. To test a new firmware revision, flash it and take a
+fresh capture. Keep the firmware revision with the capture and verdict hashes.
 
 ## Checklist
 

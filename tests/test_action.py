@@ -164,3 +164,41 @@ def test_evidence_file_carries_hashes(check, monkeypatch, tmp_path, good_csv):
     assert len(data["checks"][0]["contract_sha256"]) == 64
     assert len(data["checks"][0]["input_sha256"]) == 64
     assert data["checks"][0]["input_kind"] == "timing"
+
+
+@pytest.mark.parametrize("kind,contract,text,diagnostic", [
+    ("serial", "ws2812b", "panic", "expected a serial contract"),
+    ("timing", "boot", "0\n1\n", "expected a timing contract"),
+    ("events", "ws2812b", "[]", "expected an events contract"),
+    ("timing", "ws2812b", "Time,D0\n0,1\n", "expected one 0 or 1"),
+    ("timing", "ws2812b", "", "no samples"),
+])
+def test_invalid_input_cannot_emit_pass(check, monkeypatch, tmp_path, capsys,
+                                      kind, contract, text, diagnostic):
+    path = tmp_path / "input.txt"
+    path.write_text(text)
+    set_env(monkeypatch, tmp_path, **{kind: f"{contract}={path}"})
+    with pytest.raises(SystemExit, match=diagnostic):
+        check.main()
+    assert "PASS" not in capsys.readouterr().out
+
+
+def test_oversized_serial_cannot_emit_pass_evidence(check, monkeypatch, tmp_path, capsys):
+    from hwcontract.judge import SERIAL_CAP
+    path = tmp_path / "boot.log"
+    good = "boot v3\nIMU init OK\n"
+    path.write_text(good + "x" * (SERIAL_CAP - len(good)) + "panic")
+    report = tmp_path / "evidence.json"
+    set_env(monkeypatch, tmp_path, serial=f"boot={path}", evidence=str(report))
+    with pytest.raises(SystemExit, match="exceeds limit"):
+        check.main()
+    assert "PASS" not in capsys.readouterr().out
+    assert not report.exists()
+
+
+@pytest.mark.parametrize("rate", ["0", "-1", "nan", "inf"])
+def test_action_rejects_invalid_samplerate(check, monkeypatch, tmp_path, rate):
+    set_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("INPUT_SAMPLERATE", rate)
+    with pytest.raises(SystemExit, match="samplerate must be a positive finite"):
+        check.main()

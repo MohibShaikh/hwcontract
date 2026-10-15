@@ -9,10 +9,11 @@ review and then fail the moment the signal hits a real chip. hwcontract closes
 that loop. It captures what the hardware *actually* did and returns a verdict you
 can act on:
 
-- **pass**: within spec
-- **marginal**: in spec but too close to a rail. Works on your bench, dies on a
+- **PASS**: within spec
+- **MARGINAL**: in spec but too close to a rail. Works on your bench, dies on a
   cold board in the field. It fails the verdict: the judge will not ship it.
-- **fail**: out of spec, with the measured value and how far off it is
+- **FAIL**: out of spec, with the measured value and how far off it is
+- **MISSING**: a required observation is absent; this also fails the verdict
 
 Two things a green verdict gives you beyond the table:
 
@@ -28,15 +29,22 @@ signal, so you can see exactly what you get before wiring anything up.
 
 ![hwcontract judging a real WS2812B capture, a DMA-broken SPI trace, and a serial boot log](https://raw.githubusercontent.com/MohibShaikh/hwcontract/main/demo/hwcontract.gif)
 
-## See it work in 30 seconds
+## Replay a real capture
 
 ```bash
 pip install hwcontract
-python3 -m hwcontract.judge --demo
+python3 -m hwcontract.demo ws2812b
 ```
 
-That judges a real 24-LED NeoPixel capture against two contracts. Same signal,
-two verdicts:
+This downloads a recorded 24-LED NeoPixel capture from sigrok (about 109 KiB)
+on the first run, verifies its SHA256, then caches it in
+`$XDG_CACHE_HOME/hwcontract` or `~/.cache/hwcontract`. It needs network access
+once; subsequent runs can use `--offline`. Use `--cache-dir DIR` or
+`--capture PATH` for a copy of the same pinned capture. No sigrok installation
+or hardware is needed. [Capture provenance and license](https://github.com/MohibShaikh/hwcontract/blob/main/hwcontract/demo-provenance.md).
+
+The capture is judged against two contracts. Same signal, two verdicts
+(output excerpt; each judgment also prints its evidence hashes):
 
 ```
 measured on the real WS2812B signal (300000 samples @24MHz):
@@ -44,10 +52,10 @@ measured on the real WS2812B signal (300000 samples @24MHz):
 
 === generic WS2812 contract -> FAIL ===
   T0H     350   333  PASS
-  T0L     800   917  MARGINAL  only 33ns from max; nudge toward typ 800
+  T0L     800   917  FAIL      1842 of 4275 pulses out of window (43.09%)
   T1H     700   833  MARGINAL  only 17ns from max; nudge toward typ 700
   T1L     600   417  FAIL      183ns short (typ 600)
-  RESET 50000    -  PASS
+  RESET 50000 992250 PASS
 
 === matching WS2812B contract -> PASS ===
   (all five edges PASS)
@@ -60,15 +68,15 @@ match the contract to the actual chip.
 ## See the temporal engine catch a DMA bug
 
 ```bash
-python3 demo/spi_dma_temporal.py
+python3 -m hwcontract.demo spi
 ```
 
 100 synthesized SPI frames as raw CS/SCK/MOSI waveforms at 100MHz, reduced to
 pin edges and judged against the bundled `spi-frame` contract. Frame 77 has
-the Zephyr LPSPI DMA fault: chip-select asserts after the clock starts. Frame
+a simulated DMA ordering fault: chip-select asserts after the clock starts. Frame
 42 settles MOSI 10ns before the sampling edge. Both come back with exact
-timestamps, and the same broken edges are re-imported as sigrok-style B/E
-jsontrace annotations:
+timestamps. An additional artificial B/E jsontrace roundtrip tests the
+importer; those annotations are **not real sigrok SPI decoder output**:
 
 ```
 cs-precedes-first-clock  800  1  FAIL  trigger at 1540310ns: no gpio.cs.falling
@@ -77,20 +85,29 @@ mosi-setup               800  1  FAIL  forbidden spi.mosi.* at 843300ns is 10ns
                                           before spi.sck.rising at 843310ns
 ```
 
-The data is perfect in all 100 frames; a loopback test passes. The ordering is
-broken in two, and only a cross-signal assertion notices.
+This is an offline, deterministic pin-timing demonstration. It does not decode
+SPI payload bytes or run a loopback test. `python3 -m hwcontract.demo serial`
+also works offline with synthetic clean and panicking boot logs. Repository
+commands such as `python3 demo/spi_dma_temporal.py` remain compatibility wrappers.
+All demos exit zero when their expected PASS/FAIL outcomes occur; use the judge
+CLI or MCP verdict for a production check.
 
 ## What you get
 
-- **28 bundled contracts** for the parts people actually use: WS2812/WS2813/
-  SK6812 NeoPixels, DShot ESCs (150/300/600/1200), servos, I2C, NEC IR remotes,
-  DS18B20, DHT11/DHT22, HC-SR04, A4988/DRV8825 stepper drivers, PWM fans, plus
-  serial boot logs for ESP32, ESP8266, Zephyr, MicroPython, Raspberry Pi, U-Boot,
-  and STM32 bootloaders. Each one has the datasheet's real min/typ/max numbers.
-- **Temporal assertions between decoded events.** SVA-style cross-signal checks
-  (ordering, setup windows, forbidden states) on sigrok jsontrace output, judged
-  for every occurrence with latency percentiles and first-failure timestamps.
-- **Add a protocol by dropping in one YAML file.** No code change.
+- **28 bundled contract templates**, including WS2812-family LEDs, DShot,
+  servo/I2C/sensor/stepper timing, serial boot logs, and SPI pin ordering.
+  They are a spec library, not 28 ready-to-use capture integrations. Verify the
+  template against your exact part and its datasheet.
+- **Working capture paths:** WS2812-family pulse-width buckets, DShot600 via
+  `check_dshot`, and serial logs. DShot150/300/1200 need rate-specific adapter
+  thresholds. Servo, I2C, HC-SR04 and other timing templates need custom
+  observation adapters producing the contract's named measurements.
+- **Temporal assertions on normalized events.** Raw pin transitions feed
+  `spi-frame`; decoder annotations need contracts matching the decoder's
+  actual sources and event types.
+- **New specifications can be YAML-only when an existing adapter emits the
+  required observations.** A new protocol may also require adapter code and
+  known-good/known-bad captures.
 - **An MCP server** your agent can call, or plain CLI commands you can run by hand.
 - **Evidence on every verdict:** contract hash, capture hash, capture parameters,
   tool version, timestamp. A green build traces back to the exact bytes.
@@ -110,6 +127,16 @@ pip install "hwcontract[all]"       # everything
 Live logic-analyzer capture (`check_ws2812` / `check_dshot`) also needs
 `sigrok-cli` on PATH. Judge-only tools (`judge_contract`, `judge_serial`) need
 nothing extra.
+
+```bash
+hwcontract --help
+hwcontract --version
+hwcontract --list-contracts         # names, kinds, capture requirements
+hwcontract --list-contracts --json  # also includes absolute installed paths
+```
+
+These commands exit immediately. Bare `hwcontract` starts the MCP stdio server
+and waits for JSON-RPC requests on stdin.
 
 ## Wire it into an agent
 
@@ -149,16 +176,21 @@ can fail with "command not found". Two robust fixes:
 - Or invoke via Python (no PATH lookup for the script): `command: "python3"`,
   `args: ["-m", "hwcontract.server"]`. Works from any directory once installed.
 
-**Contract paths:** pass an **absolute** `contract_path`, or set `HWCONTRACT_ROOT`
-to your contracts folder. Relative paths resolve against it, defaulting to the
-process's working directory, which the client controls and may not be your
-project. Paths outside the root are rejected. Bundled examples install with the
-package under `hwcontract/examples/`.
+**Contract paths:** MCP tools accept short bundled names such as `ws2812b`,
+`boot`, or `spi-frame`, or their full filenames (`ws2812b.contract.yaml`).
+These names match the pytest plugin and Action; for DShot600 the name is
+`dshot`, and the mini LED name is `ws2812b_mini`. An existing project file wins.
+Relative paths resolve under `HWCONTRACT_ROOT` (default: the server's working
+directory). Arbitrary absolute paths and symlinks must stay within that root.
+Only exact installed paths returned by `list_contracts` may refer to bundled
+contracts outside it; this does not grant access to other package files.
+The lower-level `judge` and `temporal` module CLIs still take file paths.
 
 ## The tools
 
 | Tool | Hardware? | What it does |
 |------|-----------|--------------|
+| `list_contracts` | no | List all 28 templates, kinds, installed paths and capture requirements. |
 | `judge_contract` | no | Judge given observations against a timing contract. Replay / testing. |
 | `judge_serial` | no | Judge a given log string against a serial contract's expect/forbid. |
 | `judge_events` | no | Judge decoded events against temporal assertions (when/require/within, forbid/while/before). |
@@ -167,20 +199,20 @@ package under `hwcontract/examples/`.
 | `capture_ws2812` | yes | Just capture → observations (no judging). |
 | `check_serial` | yes | Read a serial port for N seconds and judge the log. |
 
-Event contracts are the SVA-style layer: relationships between decoded
-events, checked for every occurrence, with latency distributions and
-first-failure timestamps. Feed them `sigrok-cli --protocol-decoder-jsontrace`
-output and judge from the CLI:
+Event contracts check relationships for every occurrence, with latency
+distributions and first-failure timestamps. The bundled `spi-frame` contract
+requires `gpio.cs.falling/rising`, `spi.sck.rising`, and `spi.mosi.*` raw pin
+edges. A sigrok SPI `Data` annotation does not supply those events. Follow the
+[complete multi-channel CSV-to-edge recipe](https://github.com/MohibShaikh/hwcontract/blob/main/docs/writing-contracts.md#raw-spi-capture-to-a-verdict)
+to judge an actual capture. Semantic decoder checks use separate contracts
+matching the imported decoder rows.
 
-```bash
-python3 -m hwcontract.temporal spi-frame.contract.yaml trace.json
-```
+Use the judge matching the contract kind: timing, serial, or events. Wrong-kind
+calls are errors. Serial logs longer than 1,000,000 characters are rejected,
+not silently truncated. CSV inputs must contain valid digital samples;
+malformed rows and empty captures are errors, not evidence of a passing device.
 
-The bundled `spi-frame.contract.yaml` catches the Zephyr LPSPI class of bug
-(CS asserting after SCK starts, MOSI setup collapse) that loopback tests
-cannot see.
-
-Prefer plain pytest over MCP? [`pytest-hwcontract`](pytest-hwcontract/) is a
+Prefer plain pytest over MCP? [`pytest-hwcontract`](https://github.com/MohibShaikh/hwcontract/tree/main/pytest-hwcontract) is a
 plugin that turns verdicts into tests: a FAIL, MARGINAL or MISSING edge fails
 the test with the verdict table in the message, JUnit included.
 
@@ -202,13 +234,18 @@ A FAIL, MARGINAL or MISSING edge fails the step, annotates the failing line,
 and writes JUnit. The action self-tests on every push to this repo with one
 clean and one deliberately broken capture.
 
+Replaying an unchanged recorded capture checks the judge and contract against
+those recorded bytes. It does **not** test newly built firmware. To gate a
+firmware change, flash that build, collect a fresh capture/log, and judge it;
+retain the firmware revision, capture parameters and verdict evidence together.
+
 ## How it fits together
 
 ```
   observers (capture)                  judge (this repo)
   ─────────────────────                ─────────────────
   logic analyzer  ─ pulse widths ─┐
-  serial port     ─ log text ─────┼─►  contract × observation  ─►  pass/marginal/fail
+  serial port     ─ log text ─────┼─►  contract × observation  ─►  PASS/MARGINAL/FAIL/MISSING
   sigrok jsontrace ─ events ──────┘         (judge.py / temporal.py)
 ```
 
@@ -250,7 +287,8 @@ assertions:
      forbid: spi.mosi.*, before: 20ns}
 ```
 
-Add a protocol = drop a new YAML. No code change for another timing signal.
+A new contract needs matching observations. Add an adapter when the existing
+capture paths do not emit them; YAML alone does not add protocol support.
 
 ## Kill switch
 
@@ -258,15 +296,14 @@ Instantly disable every hardware-touching tool (captures) while leaving the pure
 judge tools working:
 
 ```bash
-export HWCONTRACT_SAFE=1          # env, or:
-touch /home/tsd/projects/hardware/KILLSWITCH   # file next to server.py
+export HWCONTRACT_SAFE=1
 ```
 
 ## Security
 
 Every tool argument is treated as hostile, since the caller is an LLM that can be
-prompt-injected. Contract paths are confined to the server dir, `HWCONTRACT_ROOT`
-overrides that. `driver`/`channel`/`port` are charset-validated,
+prompt-injected. Arbitrary contract paths are confined to the server working directory,
+with `HWCONTRACT_ROOT` overriding it; exact bundled contracts are allowlisted. `driver`/`channel`/`port` are charset-validated,
 `samples`/`seconds`/`samplerate` are clamped, `sigrok-cli` runs with a timeout,
 YAML is `safe_load`. Do not expose this server over the network without adding
 authentication.
@@ -275,7 +312,7 @@ authentication.
 
 ```bash
 hwcontract --selftest                       # full MCP round-trip
-python3 -m hwcontract.judge --demo
+python3 -m hwcontract.judge --demo           # tiny synthetic self-test, includes MISSING RESET
 python3 -m hwcontract.sigrok_adapter --demo
 python3 -m hwcontract.serial_adapter --demo
 pytest                                      # the tests/ suite; pip install -e .[dev]

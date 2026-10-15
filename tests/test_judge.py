@@ -179,3 +179,72 @@ def test_load_contract_accepts_bundled_examples():
     for path in sorted(glob.glob(os.path.join(ex, "*.contract.yaml"))):
         validate = load_contract(path)  # must not raise for any bundled contract
         assert validate["contract"]
+
+
+@pytest.mark.parametrize("actual,expected", [
+    (actual, expected) for actual in ("timing", "serial", "events")
+    for expected in ("timing", "serial", "events") if actual != expected
+])
+def test_each_judge_rejects_other_contract_kinds_before_reading_input(actual, expected):
+    from hwcontract.judge import run_serial
+    from hwcontract.temporal import judge_events
+    contracts = {"timing": timing_contract(),
+                 "serial": {"kind": "serial", "expect": ["boot"]},
+                 "events": {"kind": "events", "assertions": [
+                     {"name": "a", "when": "ping", "require": "pong"}]}}
+    judges = {"timing": run, "serial": run_serial, "events": judge_events}
+    # None is deliberately invalid measurement input: kind errors come first.
+    with pytest.raises(ContractError, match=f"expected an? {expected} contract"):
+        judges[expected](contracts[actual], None)
+
+
+def test_metadata_free_inline_contracts_are_supported_without_mutation():
+    from hwcontract.judge import run_serial
+    from hwcontract.temporal import judge_events
+    timing = {"headroom_pct": 20, "edges": BASE_EDGES}
+    assert run(timing, [obs("T0H", 400), obs("RESET", 60000)])[1]
+    serial = {"expect": ["boot"], "forbid": ["panic"]}
+    assert run_serial(serial, "boot")[1]
+    events = {"assertions": [{"name": "a", "when": "ping", "require": "pong"}]}
+    assert judge_events(events, [{"type": "ping", "start_ns": 0},
+                                 {"type": "pong", "start_ns": 1}])[1]
+    assert all("kind" not in c and "contract" not in c for c in (timing, serial, events))
+    with pytest.raises(ContractError, match="expected a serial contract"):
+        run_serial(timing, "panic")
+
+
+def test_direct_judges_validate_malformed_contracts():
+    from hwcontract.judge import run_serial
+    from hwcontract.temporal import judge_events
+    with pytest.raises(ContractError) as exc:
+        run({"headroom_pct": -1, "edges": []}, [])
+    assert "headroom_pct" in str(exc.value) and "non-empty list" in str(exc.value)
+    with pytest.raises(ContractError, match="at least one expect or forbid"):
+        run_serial({"kind": "serial"}, "panic")
+    with pytest.raises(ContractError, match="'forbid' needs 'while' or 'before'"):
+        judge_events({"kind": "events", "assertions": [
+            {"name": "a", "when": "ping", "forbid": "pong"}]}, [])
+
+
+def test_unbounded_edge_with_omitted_max_can_be_judged():
+    c = timing_contract(edges=[{"name": "E", "min": 1, "typ": 2}])
+    assert run(c, [{"name": "E", "value": 3, "widths": [3]}])[1]
+
+
+def test_malformed_yaml_is_a_contract_error(tmp_path):
+    p = tmp_path / "bad.yaml"
+    p.write_text("contract: [broken\n")
+    with pytest.raises(ContractError, match="invalid contract YAML"):
+        load_contract(p)
+
+
+def test_malformed_contract_key_types_and_large_durations_report_problems():
+    with pytest.raises(ContractError) as exc:
+        validate_contract({"contract": "t", "kind": "events", 1: True, "junk": 1,
+                           "assertions": [{"name": "a", "when": "ping", "require": "pong",
+                                           "within": ["1e308s", "bad"]}]})
+    message = str(exc.value)
+    assert "unknown keys" in message
+    assert "within[0]" in message and "within[1]" in message
+    with pytest.raises(ContractError, match="must be finite"):
+        run(timing_contract(headroom_pct=10 ** 1000), [])

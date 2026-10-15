@@ -162,3 +162,56 @@ def test_capture_csv_helper(pytester):
             assert isinstance(obs, list)
         """)
     pytester.runpytest().assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize("method,contract,data", [
+    ("serial", "ws2812b", "panic"),
+    ("timing", "boot", []),
+    ("events", "ws2812b", []),
+])
+def test_wrong_kind_fails_without_recording_a_pass(pytester, method, contract, data):
+    pytester.makepyfile(f'''
+        def test_wrong_kind(hwcontract):
+            hwcontract.{method}({contract!r}, {data!r})
+    ''')
+    result = pytester.runpytest("--junit-xml", "junit.xml")
+    result.assert_outcomes(failed=1)
+    article = "an" if method == "events" else "a"
+    assert f"expected {article} {method} contract" in result.stdout.str()
+    import xml.etree.ElementTree as ET
+    assert not [p for p in ET.parse("junit.xml").iter("property")
+                if p.get("name") == "hwcontract.verdict"]
+
+
+def test_oversized_serial_log_clears_stale_evidence(pytester):
+    pytester.makepyfile('''
+        import pytest
+        from hwcontract.judge import SERIAL_CAP
+
+        def test_boot(hwcontract):
+            good = "boot v3\\nIMU init OK\\nready\\n"
+            hwcontract.serial("boot", good)
+            assert hwcontract.evidence["verdict"] == "PASS"
+            log = good + "x" * (SERIAL_CAP - len(good)) + "panic"
+            with pytest.raises(ValueError, match="exceeds limit"):
+                hwcontract.serial("boot", log)
+            assert hwcontract.evidence is None
+    ''')
+    pytester.runpytest().assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize("rate,text,diagnostic", [
+    (0, "0\n1\n", "samplerate"),
+    (-24_000_000, "0\n1\n", "samplerate"),
+    (24_000_000, "Time,D0\n0,0\n1,1\n", "expected one 0 or 1"),
+    (24_000_000, "", "no samples"),
+])
+def test_capture_csv_rejects_invalid_inputs(pytester, rate, text, diagnostic):
+    pytester.makefile(".csv", capture=text)
+    pytester.makepyfile(f'''
+        import pytest
+        def test_capture(hwcontract):
+            with pytest.raises(ValueError, match={diagnostic!r}):
+                hwcontract.capture_csv("capture.csv", samplerate={rate!r})
+    ''')
+    pytester.runpytest().assert_outcomes(passed=1)

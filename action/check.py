@@ -15,7 +15,8 @@ import xml.etree.ElementTree as ET
 from hwcontract.judge import (load_contract, run, run_serial, render,
                               render_verdict, sha256_of, verdict)
 from hwcontract.jsontrace import from_traceevents
-from hwcontract.sigrok_adapter import observe, read_csv
+from hwcontract.sigrok_adapter import observe, read_csv, sample_period
+from hwcontract.serial_adapter import read_log
 from hwcontract.temporal import judge_events, normalize_events, render_events
 
 BUNDLED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -72,8 +73,7 @@ def run_case(kind, contract, path, dt_ns):
         results, ok = run(c, observe(read_csv(path), dt_ns))
         table = render(results)
     elif kind == "serial":
-        with open(path, errors="replace") as fh:
-            results, ok = run_serial(c, fh.read())
+        results, ok = run_serial(c, read_log(path))
         table = render(results)
     else:
         results, ok = judge_events(c, load_events(path))
@@ -116,7 +116,10 @@ def evidence_write(path, cases):
 
 
 def main(argv=None):
-    dt_ns = 1e9 / int(os.environ.get("INPUT_SAMPLERATE", "24000000"))
+    try:
+        dt_ns = sample_period(os.environ.get("INPUT_SAMPLERATE", "24000000"))
+    except ValueError as e:
+        raise SystemExit(f"hwcontract-action: {e}") from e
     kinds = (("timing", os.environ.get("INPUT_TIMING")),
              ("serial", os.environ.get("INPUT_SERIAL")),
              ("events", os.environ.get("INPUT_EVENTS")))
@@ -124,7 +127,10 @@ def main(argv=None):
     for kind, spec in kinds:
         for contract, files in parse_pairs(spec, kind):
             for path in files:
-                cases.append(run_case(kind, contract, path, dt_ns))
+                try:
+                    cases.append(run_case(kind, contract, path, dt_ns))
+                except ValueError as e:
+                    raise SystemExit(f"hwcontract-action: {kind}:{contract}:{path}: {e}") from e
 
     junit_path = os.environ.get("INPUT_JUNIT", "")
     if junit_path:

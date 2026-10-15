@@ -133,3 +133,56 @@ def test_verdicts_carry_evidence():
     assert ev["contract_sha256"] and len(ev["contract_sha256"]) == 64
     assert ev["observation_count"] == 5
     assert ev["observations_sha256"] and ev["hwcontract_version"]
+
+
+def test_http_survives_hostile_envelopes(monkeypatch):
+    from http import client
+    from http import server as http_server
+    import queue
+    import threading
+
+    ready = queue.Queue()
+    real_server = http_server.ThreadingHTTPServer
+
+    def create(*args, **kwargs):
+        instance = real_server(*args, **kwargs)
+        ready.put(instance)
+        return instance
+
+    monkeypatch.setattr(http_server, "ThreadingHTTPServer", create)
+    monkeypatch.delenv("HWCONTRACT_TOKEN", raising=False)
+    thread = threading.Thread(target=server.serve_http, args=(0,), daemon=True)
+    thread.start()
+    instance = ready.get(timeout=5)
+    conn = client.HTTPConnection("127.0.0.1", instance.server_port, timeout=5)
+    try:
+        for payload in [[], {"params": []}, {"params": "bad"},
+                        {"params": {"_meta": 1}},
+                        {"params": {"_meta": {_V: MODERN_VERSION}}, "method": ["bad"]}]:
+            conn.request("POST", "/", body=json.dumps(payload),
+                         headers={"Content-Type": "application/json"})
+            response = conn.getresponse()
+            assert "error" in json.loads(response.read())
+        conn.request("POST", "/", body=json.dumps({"jsonrpc": "2.0", "id": 2,
+                                                    "method": "tools/list"}))
+        response = conn.getresponse()
+        assert response.status == 200
+        assert "list_contracts" in {tool["name"] for tool in json.loads(response.read())["result"]["tools"]}
+    finally:
+        conn.close()
+        instance.shutdown()
+        instance.server_close()
+        thread.join(timeout=5)
+
+
+def test_selftest_preserves_root_and_never_captures(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ROOT", str(tmp_path))
+    monkeypatch.setenv("HWCONTRACT_SAFE", "original")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("selftest must not invoke a hardware capture")
+
+    monkeypatch.setattr(server, "capture", forbidden)
+    server.selftest()
+    assert server.ROOT == str(tmp_path)
+    assert os.environ["HWCONTRACT_SAFE"] == "original"

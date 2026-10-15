@@ -16,6 +16,7 @@ Transport is stdlib only. All real work lives in judge.py / sigrok_adapter.py
 (pure, tested). Add a tool = append one entry to TOOLS.  Self-test: --selftest
 """
 import base64
+import argparse
 import json
 import os
 import re
@@ -27,14 +28,15 @@ from hwcontract.judge import (load_contract, run, run_serial, render,
 from hwcontract.sigrok_adapter import capture, observe
 from hwcontract.temporal import judge_events, render_events
 from hwcontract import serial_adapter
+from hwcontract.contracts import list_contracts, resolve_contract
 
 MODERN_VERSION = "2026-07-28"
 LEGACY_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 SERVER_INFO = {"name": "hwcontract", "version": __version__}
 CAPABILITIES = {"tools": {}}
-INSTRUCTIONS = ("Judge hardware timing and serial output against a contract file. "
-                "Every tool takes a path to a .contract.yaml; the check_/capture_ "
-                "tools also need sigrok or a serial port attached.")
+INSTRUCTIONS = ("Use list_contracts to discover bundled templates and capture support. "
+                "Judges accept a bundled name or a contract path under HWCONTRACT_ROOT. "
+                "check_/capture_ tools need sigrok or a serial port attached.")
 
 # _meta keys: the first two are required on every modern request, the third is
 # what a modern result answers with.
@@ -66,11 +68,8 @@ def _guard():
 
 
 def _path(p):
-    """Confine a contract path to ROOT, blocking traversal and arbitrary file reads."""
-    full = os.path.realpath(p if os.path.isabs(p) else os.path.join(ROOT, p))
-    if full != ROOT and not full.startswith(ROOT + os.sep):
-        raise ValueError(f"path escapes allowed root: {p}")
-    return full
+    """Resolve bundled contracts while confining arbitrary files to ROOT."""
+    return resolve_contract(p, ROOT)
 
 
 def _tok(name, v):
@@ -174,9 +173,15 @@ _STR = {"type": "string"}
 _CAP = {"driver": _STR, "channel": _STR, "samplerate": _NUM, "samples": _NUM}
 
 TOOLS = {
+    "list_contracts": {
+        "fn": list_contracts,
+        "description": "List bundled contract templates, names, kinds, installed paths, "
+                       "and capture adapter requirements. No hardware.",
+        "schema": {"type": "object", "properties": {}},
+    },
     "judge_contract": {
         "fn": tool_judge_contract,
-        "description": "Judge observations against a contract -> pass/marginal/fail. "
+        "description": "Judge observations against a timing contract -> PASS/MARGINAL/FAIL/MISSING. "
                        "No hardware; use for replay or when an adapter already captured.",
         "schema": {"type": "object",
                    "properties": {"contract_path": _STR,
@@ -240,7 +245,19 @@ TOOLS = {
 # handshake client and gets the old result shape.
 
 def _meta_of(msg):
-    return (msg.get("params") or {}).get("_meta") or {}
+    if not isinstance(msg, dict):
+        raise ValueError("request must be an object")
+    params = msg.get("params")
+    if params is None:
+        return {}
+    if not isinstance(params, dict):
+        raise ValueError("params must be an object")
+    meta = params.get("_meta")
+    if meta is None:
+        return {}
+    if not isinstance(meta, dict):
+        raise ValueError("_meta must be an object")
+    return meta
 
 
 def _handle(msg):
@@ -432,12 +449,13 @@ def serve_http(port, host="127.0.0.1"):
             except (ValueError, json.JSONDecodeError):
                 return self._send(200, {"jsonrpc": "2.0", "id": None,
                                         "error": {"code": -32700, "message": "parse error"}})
-            modern = _V in _meta_of(msg)
-            if modern:
-                bad = _header_error(self.headers, msg)
-                if bad:
-                    return self._send(400, bad)
+            modern = False
             try:
+                modern = _V in _meta_of(msg)
+                if modern:
+                    bad = _header_error(self.headers, msg)
+                    if bad:
+                        return self._send(400, bad)
                 resp = _handle(msg)
             except Exception as e:                  # mirror the stdio loop: answer, don't drop the connection
                 resp = {"jsonrpc": "2.0", "id": msg.get("id") if isinstance(msg, dict) else None,
@@ -473,10 +491,8 @@ def serve_http(port, host="127.0.0.1"):
 
 def selftest():
     """Drive both protocol eras in-process, no hardware, no cwd dependency."""
-    global ROOT
     import io
     from hwcontract.sigrok_adapter import synth, observe as _obs
-    ROOT = os.path.realpath(EXAMPLES)           # confine to the bundled examples, wherever installed
     dt = 1e9 / 24_000_000
     obs = _obs(synth(dt), dt)
 
@@ -529,7 +545,15 @@ def selftest():
     ]
     raw = "\n".join([json.dumps(m) for m in msgs] + ['{"jsonrpc": broken', "[1, 2, 3]"])
     out = io.StringIO()
-    serve(io.StringIO(raw), out)
+    previous_safe = os.environ.get("HWCONTRACT_SAFE")
+    try:
+        os.environ["HWCONTRACT_SAFE"] = "1"     # self-test never touches hardware
+        serve(io.StringIO(raw), out)
+    finally:
+        if previous_safe is None:
+            os.environ.pop("HWCONTRACT_SAFE", None)
+        else:
+            os.environ["HWCONTRACT_SAFE"] = previous_safe
     responses = [json.loads(l) for l in out.getvalue().splitlines()]
     r = {m["id"]: m for m in responses if m.get("id") is not None}
     strays = [m for m in responses if m.get("id") is None]
@@ -568,11 +592,33 @@ def selftest():
 
 
 def main(argv=None):
-    argv = sys.argv if argv is None else argv
-    if "--selftest" in argv:
+    parser = argparse.ArgumentParser(
+        description="Hardware contract judges and MCP server (default: stdio).",
+        epilog="Demos: python -m hwcontract.demo ws2812b (downloaded real capture), "
+               "or python -m hwcontract.demo spi (offline synthetic frames).")
+    parser.add_argument("--version", action="version", version=f"hwcontract {__version__}")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--selftest", action="store_true", help="run the offline MCP self-test and exit")
+    modes.add_argument("--http", type=int, metavar="PORT", help="serve MCP HTTP on localhost")
+    modes.add_argument("--list-contracts", action="store_true", help="list bundled templates and capture requirements")
+    parser.add_argument("--json", action="store_true", help="emit --list-contracts as JSON")
+    args = parser.parse_args(argv)
+    if args.json and not args.list_contracts:
+        parser.error("--json requires --list-contracts")
+    if args.http is not None and not 1 <= args.http <= 65535:
+        parser.error("--http PORT must be between 1 and 65535")
+    if args.selftest:
         selftest()
-    elif "--http" in argv:
-        serve_http(int(argv[argv.index("--http") + 1]))
+    elif args.http is not None:
+        serve_http(args.http)
+    elif args.list_contracts:
+        entries = list_contracts()
+        if args.json:
+            print(json.dumps(entries, indent=2))
+        else:
+            print(f"{len(entries)} bundled contract templates (not all have capture adapters):")
+            for entry in entries:
+                print(f"{entry['name']:<20} {entry['kind']:<7} {entry['capture_path']}")
     else:
         try:
             serve(sys.stdin, sys.stdout)                 # default: stdio

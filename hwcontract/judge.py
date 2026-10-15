@@ -29,8 +29,8 @@ from hwcontract import __version__
 
 PASS, MARGINAL, FAIL, MISSING = "PASS", "MARGINAL", "FAIL", "MISSING"
 
-# A serial capture longer than this is truncated before matching: bounds memory
-# and the ReDoS blast radius under stdlib re.
+# Maximum decoded characters in a serial capture. Reject larger logs rather
+# than judging a prefix that might hide forbidden output in the tail.
 SERIAL_CAP = 1_000_000
 
 # An observation carrying raw pulse widths ("widths") is judged on every pulse,
@@ -132,7 +132,11 @@ def _num(value, what, problems):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         problems.append(f"{what} must be a number, got {value!r}")
         return None
-    if not math.isfinite(value):
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite:
         problems.append(f"{what} must be finite, got {value!r}")
         return None
     if value < 0:
@@ -144,7 +148,7 @@ def _num(value, what, problems):
 def _try(fn, value, problems, what):
     try:
         return fn(value)
-    except ValueError as e:
+    except (ValueError, TypeError, OverflowError) as e:
         problems.append(f"{what}: {e}")
         return None
 
@@ -154,7 +158,7 @@ def _validate_events(contract, problems):
     assertion picks a coherent shape (require+within, or forbid+while/before)."""
     unknown = set(contract) - _EVENTS_KEYS
     if unknown:
-        problems.append(f"unknown keys for an events contract: {sorted(unknown)}")
+        problems.append(f"unknown keys for an events contract: {sorted(unknown, key=str)}")
     assertions = contract.get("assertions")
     if not isinstance(assertions, list) or not assertions:
         problems.append("'assertions' must be a non-empty list")
@@ -167,7 +171,7 @@ def _validate_events(contract, problems):
             continue
         unknown = set(a) - _ASSERTION_KEYS
         if unknown:
-            problems.append(f"{label} has unknown keys: {sorted(unknown)}")
+            problems.append(f"{label} has unknown keys: {sorted(unknown, key=str)}")
         name = a.get("name")
         if not isinstance(name, str) or not name.strip():
             problems.append(f"{label}.name must be a non-empty string")
@@ -206,6 +210,8 @@ def _validate_events(contract, problems):
                         problems.append(f"{label}.within: min {lo} > max {hi}")
         if has_forbid:
             _try(parse_selector, a.get("forbid"), problems, f"{label}.forbid")
+            if "while" not in a and "before" not in a:
+                problems.append(f"{label}: 'forbid' needs 'while' or 'before'")
             if "while" in a:
                 _try(parse_selector, a.get("while"), problems, f"{label}.while")
             if "before" in a:
@@ -229,7 +235,7 @@ def validate_contract(contract):
     if kind == "serial":
         unknown = set(contract) - _SERIAL_KEYS
         if unknown:
-            problems.append(f"unknown keys for a serial contract: {sorted(unknown)}")
+            problems.append(f"unknown keys for a serial contract: {sorted(unknown, key=str)}")
         patterns = []
         for field in ("expect", "forbid"):
             pats = contract.get(field, [])
@@ -250,7 +256,7 @@ def validate_contract(contract):
     else:
         unknown = set(contract) - _TIMING_KEYS
         if unknown:
-            problems.append(f"unknown keys for a timing contract: {sorted(unknown)}")
+            problems.append(f"unknown keys for a timing contract: {sorted(unknown, key=str)}")
         unit = contract.get("unit", "ns")
         if unit != "ns":
             problems.append(f"unit must be 'ns', got {unit!r}")
@@ -268,7 +274,7 @@ def validate_contract(contract):
                 continue
             unknown = set(edge) - _EDGE_KEYS
             if unknown:
-                problems.append(f"edges[{i}] has unknown keys: {sorted(unknown)}")
+                problems.append(f"edges[{i}] has unknown keys: {sorted(unknown, key=str)}")
             ename = edge.get("name")
             if not isinstance(ename, str) or not ename.strip():
                 problems.append(f"edges[{i}].name must be a non-empty string")
@@ -291,10 +297,48 @@ def validate_contract(contract):
     return contract
 
 
+def validate_judge_contract(contract, expected_kind):
+    """Validate judge input, retaining metadata-free inline Python contracts.
+
+    YAML loading still requires a name and defaults to timing. Inline callers
+    may omit the name/kind, but must supply an unambiguous valid rule shape.
+    Never mutate the caller's mapping or reinterpret an explicit kind.
+    """
+    if not isinstance(contract, dict):
+        return validate_contract(contract)  # raises ContractError
+    candidate = dict(contract)
+    if "kind" not in candidate:
+        kinds = (["timing"] if "edges" in candidate else [])
+        kinds += ["serial"] if "expect" in candidate or "forbid" in candidate else []
+        kinds += ["events"] if "assertions" in candidate else []
+        if len(kinds) > 1:
+            raise ContractError("invalid contract: mixed timing, serial or events rules")
+        candidate["kind"] = kinds[0] if kinds else "timing"
+    candidate.setdefault("contract", "<inline>")
+    validate_contract(candidate)
+    if candidate["kind"] != expected_kind:
+        article = "an" if expected_kind == "events" else "a"
+        raise ContractError(f"expected {article} {expected_kind} contract, got {candidate['kind']!r}")
+    return contract
+
+
+def validate_serial_log(log):
+    """Reject non-text or oversized logs before matching or reporting evidence."""
+    if not isinstance(log, str):
+        raise ValueError("serial log must be text")
+    if len(log) > SERIAL_CAP:
+        raise ValueError(f"serial log exceeds limit of {SERIAL_CAP} characters; "
+                         "capture rejected (no partial judgment)")
+    return log
+
+
 @lru_cache(maxsize=64)
 def _load(path, _mtime):
     with open(path) as f:
-        doc = yaml.safe_load(f)
+        try:
+            doc = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ContractError(f"invalid contract YAML: {e}") from e
     return validate_contract(doc)
 
 
@@ -343,7 +387,7 @@ def _violations(edge, obs):
     widths = obs.get("widths")
     if not widths:
         return None, None
-    lo, hi = edge["min"], edge["max"]
+    lo, hi = edge["min"], edge.get("max")
     bad = sum(1 for w in widths if w < lo or (hi is not None and w > hi))
     return bad, round(100.0 * bad / len(widths), 2)
 
@@ -359,7 +403,7 @@ def judge(edge, obs, headroom_pct):
         return MISSING, "no observation for this edge"
 
     v = obs.get("p50", obs.get("value"))
-    lo, hi, typ = edge["min"], edge["max"], edge["typ"]
+    lo, hi, typ = edge["min"], edge.get("max"), edge["typ"]
     violations, pct = _violations(edge, obs)
     vhint = ""
     if violations:
@@ -392,6 +436,7 @@ _DIST_KEYS = ("count", "min", "max", "p5", "p95", "jitter")
 
 def run(contract, observations):
     """Return (results, ok). ok is False on FAIL, MISSING, and MARGINAL: marginal is a fail."""
+    validate_judge_contract(contract, "timing")
     by_name = {o["name"]: o for o in observations}
     results, ok = [], True
     for edge in contract["edges"]:
@@ -415,7 +460,8 @@ def run(contract, observations):
 
 def run_serial(contract, log):
     """Check a captured serial log against expect/forbid patterns. Same (results, ok) shape."""
-    log = log[:SERIAL_CAP]
+    validate_judge_contract(contract, "serial")
+    validate_serial_log(log)
     results, ok = [], True
 
     def search(pat):
