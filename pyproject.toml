@@ -37,7 +37,7 @@ Changelog = "https://github.com/MohibShaikh/hwcontract/releases"
 packages = ["hwcontract"]
 
 [tool.setuptools.package-data]
-hwcontract = ["examples/*.yaml", "examples/*.json"]
+hwcontract = ["examples/*.yaml", "examples/*.json", "demo-provenance.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]          # the plugin has its own suite under pytest-hwcontract/

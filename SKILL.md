@@ -1,32 +1,75 @@
 ---
 name: hwcontract
-description: Use when firmware has timing or level requirements you can measure against a spec: pulse widths on a WS2812/NeoPixel strip, DShot ESC, servo, I2C, NEC IR, DS18B20/DHT sensor, A4988/DRV8825 stepper, PWM fan, HC-SR04, when a board prints a boot log over serial (ESP32, ESP8266, Zephyr, MicroPython, u-boot, Raspberry Pi, STM32), or when decoded logic-analyzer events need cross-signal temporal assertions (SPI CS/MOSI/clock ordering and setup/hold). Invoke before declaring firmware done. Not for plain UART framing, power/wiring, or torque/current issues.
+description: Judge firmware observations against timing, serial-log, or event contracts. Use for WS2812-family pulses, DShot600, serial boot logs, and SPI raw-edge ordering. The 28 bundled templates also cover other parts, but servo/I2C/sensor/stepper protocols need custom observation adapters. Not for power/wiring or torque/current issues.
 ---
 
 # hwcontract
 
-Judge what the signal actually did against a spec. "Correct on paper" is not "correct on the wire."
+Judge measured behavior against the exact part's specification, preserving the
+capture and verdict evidence.
 
-## The one workflow
+## Workflow
 
-1. Find the closest contract in `hwcontract/examples/`. Match by chip, not guesswork.
-2. Judge your signal against it. One MCP call or one CLI line.
-3. `marginal` is a fail: in spec but too close to a rail. It works on the bench, dies in the field.
-4. Iterate until all edges `pass`.
+1. Run `hwcontract --list-contracts` or MCP `list_contracts`. Read the kind and
+   capture requirements; the 28 bundled templates are not 28 capture integrations.
+2. Match the contract and adapter to the part. WS2812-family pulse buckets,
+   DShot600 (`check_dshot`), and serial logs have capture tools. Other DShot
+   rates need custom thresholds. Servo, I2C, HC-SR04 and other timing templates
+   need an adapter that emits their named observations.
+3. Use the matching judge: timing `judge_contract`, serial `judge_serial`,
+   events `judge_events`. Wrong-kind calls are errors. MCP accepts bundled
+   names (`ws2812b`, `dshot`, `boot`, `spi-frame`) or filenames. Existing project
+   files take precedence. Arbitrary paths/symlinks must remain under
+   `HWCONTRACT_ROOT` (default: server cwd); only exact bundled contract paths
+   returned by discovery are allowed outside it.
+4. `MARGINAL`, `FAIL`, and `MISSING` all fail. Iterate until every required check
+   is `PASS`; retain contract/input hashes, parameters, version and timestamp.
+5. For a firmware change, flash the new build and take a fresh capture. CI
+   replaying an unchanged recording does not test that firmware build. Record
+   its revision alongside the capture and verdict evidence.
 
-No contract for your part? Add a YAML. No code change.
+## Installed demos and discovery
+
+```bash
+hwcontract --help
+hwcontract --version
+hwcontract --list-contracts --json
+python3 -m hwcontract.demo ws2812b  # real recorded capture; first run downloads
+python3 -m hwcontract.demo spi      # deterministic synthetic raw edges; offline
+python3 -m hwcontract.demo serial   # synthetic boot logs; offline
+```
+
+The NeoPixel capture is pinned, hash-verified and cached in
+`$XDG_CACHE_HOME/hwcontract` or `~/.cache/hwcontract`. `--offline` requires the
+cache; `--cache-dir DIR` and `--capture PATH` select a local copy. See
+[capture provenance and license](hwcontract/demo-provenance.md). Demos return
+zero for expected outcomes, including intentional FAIL cases.
+`python3 -m hwcontract.judge --demo` is a small synthetic self-test with a
+missing RESET, not a real capture. Bare `hwcontract` waits for MCP requests on
+stdio; `--http PORT` selects HTTP and `--selftest` runs the MCP self-test.
 
 ## Tools
 
-- `judge_contract` / `judge_serial` / `judge_events`: no hardware, replay a capture, a log, or decoded events
-- `check_ws2812` / `check_dshot`: capture a live line and judge it
-- `check_serial`: read a serial port for N seconds and judge the log
+- `list_contracts`: names, kinds, installed paths and capture requirements.
+- `judge_contract` / `judge_serial` / `judge_events`: replay observations,
+  serial text, or normalized events without hardware.
+- `check_ws2812` / `check_dshot`: capture WS2812-family / DShot600 timing.
+- `capture_ws2812`: observations without judgment.
+- `check_serial`: capture a serial log and judge it.
 
-## Contract format
+Set `HWCONTRACT_SAFE=1` to disable hardware-touching tools while keeping pure
+judges and discovery available.
+
+## Writing a contract
+
+Use datasheet min/typ/max values and observation names that your adapter
+actually emits. Add YAML alone only when the adapter already supplies them.
+New protocols may require adapter code. Verify both good and bad captures
+before adding a bundled template; do not add decorative protocol YAMLs.
 
 ```yaml
 contract: ws2812b
-headroom_pct: 20          # within 20% of a rail -> "marginal"
+headroom_pct: 20
 edges:
   - {name: T0H, min: 250, typ: 400, max: 550}
 ```
@@ -40,24 +83,27 @@ forbid: ["panic", "Guru Meditation"]
 
 ```yaml
 contract: spi-frame
-kind: events             # cross-signal assertions on decoded events
+kind: events
 assertions:
-  - {name: cs-precedes-first-clock, when: spi0.clock_edge.value=1,
-     require: gpio.cs.value=0, within: [-10us, 0ns]}
+  - {name: cs-precedes-first-clock, when: spi.sck.rising,
+     require: gpio.cs.falling, within: [-10us, 0ns]}
 ```
 
-## Writing a new contract
-
-1. Use the datasheet's real min/typ/max numbers. Don't invent margins.
-2. Copy the closest example. Keep its `headroom_pct` style.
-3. Name edges by what the adapter observes.
-4. Judge a known-good capture against it before calling it done.
+`spi-frame` requires raw CS/SCK/MOSI transitions. Use the
+[complete raw CSV conversion recipe](docs/writing-contracts.md#raw-spi-capture-to-a-verdict).
+Sigrok B/E decoder annotations with `pid=spi`, `tid=Data` become `spi.Data`,
+not pin edges; write a separate semantic contract for the actual decoder rows.
+The SPI demo's artificial B/E roundtrip is only an importer test.
 
 ## Pitfalls
 
-- **Chip-specific.** Two vendors, two contracts. A WS2812B isn't a WS2812.
-- **Datasheet vs reality.** Clones drift. If a contract fails identically on real hardware, the datasheet may be wrong; measure, then widen the window.
-- **Escaping.** Contract regexes are YAML strings; doubled backslashes become singles. Test against a real log.
-- **Marginal is a fail.** The judge enforces it: any MARGINAL edge fails the verdict.
-- **Medians hide glitches.** Captures carry raw pulse distributions; over 1% of pulses outside a window fails the edge even when the median passes.
-- **Capture window.** A boot banner prints once at power-on; reset the board during capture.
+- Match chip and revision; do not widen limits just to hide failures. Verify
+  datasheet, wiring, measurement resolution and adapter thresholds first.
+- Double backslashes in YAML double-quoted regexes; test against actual logs.
+- Over 1% of pulses outside the window fails even if the median passes.
+- Logs longer than 1,000,000 characters are rejected, not truncated. Empty
+  captures and malformed CSV rows are errors; dropping rows changes timing.
+- Start a boot-log capture before resetting the board. Capture complete frames
+  and reset gaps, with initial idle samples for raw edge extraction.
+- A 24 MHz analyzer cannot establish a 20 ns SPI setup margin. Use sufficient
+  sample resolution and contract windows appropriate to your device.
