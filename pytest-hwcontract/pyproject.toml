@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytest-hwcontract"
-version = "0.1.2"
+version = "0.1.3"
 description = "pytest integration for hwcontract: judge hardware timing and serial captures as tests"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -18,7 +18,7 @@ classifiers = [
   "Topic :: Software Development :: Testing",
   "Topic :: System :: Hardware",
 ]
-dependencies = ["pytest>=7", "hwcontract>=0.3"]
+dependencies = ["pytest>=7", "hwcontract>=0.5.0"]
 
 [project.entry-points.pytest11]
 hwcontract = "pytest_hwcontract.plugin"
