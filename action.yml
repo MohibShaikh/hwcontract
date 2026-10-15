@@ -42,7 +42,7 @@ runs:
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - run: pip install --quiet "hwcontract==0.4.2"
+    - run: pip install --quiet "hwcontract==0.5.0"
       shell: bash
     - id: check
       env:
