@@ -41,7 +41,7 @@ on the first run, verifies its SHA256, then caches it in
 `$XDG_CACHE_HOME/hwcontract` or `~/.cache/hwcontract`. It needs network access
 once; subsequent runs can use `--offline`. Use `--cache-dir DIR` or
 `--capture PATH` for a copy of the same pinned capture. No sigrok installation
-or hardware is needed. [Capture provenance and license](hwcontract/demo-provenance.md).
+or hardware is needed. [Capture provenance and license](https://github.com/MohibShaikh/hwcontract/blob/main/hwcontract/demo-provenance.md).
 
 The capture is judged against two contracts. Same signal, two verdicts
 (output excerpt; each judgment also prints its evidence hashes):
@@ -203,7 +203,7 @@ Event contracts check relationships for every occurrence, with latency
 distributions and first-failure timestamps. The bundled `spi-frame` contract
 requires `gpio.cs.falling/rising`, `spi.sck.rising`, and `spi.mosi.*` raw pin
 edges. A sigrok SPI `Data` annotation does not supply those events. Follow the
-[complete multi-channel CSV-to-edge recipe](docs/writing-contracts.md#raw-spi-capture-to-a-verdict)
+[complete multi-channel CSV-to-edge recipe](https://github.com/MohibShaikh/hwcontract/blob/main/docs/writing-contracts.md#raw-spi-capture-to-a-verdict)
 to judge an actual capture. Semantic decoder checks use separate contracts
 matching the imported decoder rows.
 
@@ -212,7 +212,7 @@ calls are errors. Serial logs longer than 1,000,000 characters are rejected,
 not silently truncated. CSV inputs must contain valid digital samples;
 malformed rows and empty captures are errors, not evidence of a passing device.
 
-Prefer plain pytest over MCP? [`pytest-hwcontract`](pytest-hwcontract/) is a
+Prefer plain pytest over MCP? [`pytest-hwcontract`](https://github.com/MohibShaikh/hwcontract/tree/main/pytest-hwcontract) is a
 plugin that turns verdicts into tests: a FAIL, MARGINAL or MISSING edge fails
 the test with the verdict table in the message, JUnit included.
 
