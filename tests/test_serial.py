@@ -1,5 +1,7 @@
 """Serial judge: expect/forbid semantics and the capture cap."""
-from hwcontract.judge import FAIL, PASS, run_serial
+import pytest
+
+from hwcontract.judge import ContractError, FAIL, PASS, SERIAL_CAP, run_serial
 
 CONTRACT = {"contract": "boot", "kind": "serial",
             "expect": ["IMU init OK", r"boot v\d+"],
@@ -37,22 +39,96 @@ def test_word_boundary_regex():
     assert ok is True
 
 
-def test_broken_expect_regex_reports_not_crashes():
-    c = {"contract": "b", "kind": "serial", "expect": ["(["]}
-    results, ok = run_serial(c, GOOD)
-    assert ok is False
-    assert "error" in results[0]["hint"].lower() or "Error" in results[0]["hint"]
+@pytest.mark.parametrize("field,pattern", [("expect", "(["), ("forbid", "*bad")])
+def test_broken_regex_is_a_contract_error(field, pattern):
+    with pytest.raises(ContractError, match="bad regex"):
+        run_serial({"contract": "b", "kind": "serial", field: [pattern]}, GOOD)
 
 
-def test_broken_forbid_regex_fails_closed():
-    c = {"contract": "b", "kind": "serial", "forbid": ["*bad"]}
-    results, ok = run_serial(c, GOOD)
-    assert ok is False, "a forbid rule that cannot run must fail the verdict"
-    assert results[0]["status"] == FAIL
+@pytest.mark.parametrize("length", [SERIAL_CAP - 1, SERIAL_CAP])
+def test_capture_limit_accepts_complete_logs(length):
+    log = GOOD + "x" * (length - len(GOOD))
+    assert run_serial(CONTRACT, log)[1] is True
 
 
-def test_capture_is_capped():
-    from hwcontract.judge import SERIAL_CAP
-    log = "x" * (SERIAL_CAP + 10) + "IMU init OK"
-    _, ok = run_serial(CONTRACT, log)
-    assert ok is False, "the tail beyond the cap must not be matched"
+@pytest.mark.parametrize("tail", ["x", "panic"])
+def test_oversized_capture_never_judges_a_successful_prefix(tail):
+    log = GOOD + "x" * (SERIAL_CAP - len(GOOD)) + tail
+    with pytest.raises(ValueError, match="exceeds limit.*characters"):
+        run_serial(CONTRACT, log)
+
+
+def test_forbidden_pattern_at_limit_is_checked():
+    log = GOOD + "x" * (SERIAL_CAP - len(GOOD) - len("panic")) + "panic"
+    assert run_serial(CONTRACT, log)[1] is False
+
+
+def test_non_text_log_is_rejected():
+    with pytest.raises(ValueError, match="must be text"):
+        run_serial(CONTRACT, b"boot")
+
+
+def test_read_log_uses_the_same_limit(tmp_path):
+    from hwcontract.serial_adapter import read_log
+    path = tmp_path / "boot.log"
+    # The limit counts decoded characters, not UTF-8 bytes.
+    text = "é" * SERIAL_CAP
+    path.write_text(text, encoding="utf-8")
+    assert read_log(path) == text
+    path.write_text(text + "x", encoding="utf-8")
+    with pytest.raises(ValueError, match="exceeds limit"):
+        read_log(path)
+
+
+def fake_serial(monkeypatch, chunks):
+    import sys
+    from types import SimpleNamespace
+    from hwcontract import serial_adapter
+    class Port:
+        closed = False
+        def read(self, size):
+            chunk = chunks[0][:size]
+            chunks[0] = chunks[0][size:]
+            if not chunks[0]:
+                chunks.pop(0)
+            return chunk
+        def close(self):
+            self.closed = True
+    port = Port()
+    monkeypatch.setitem(sys.modules, "serial", SimpleNamespace(Serial=lambda *a, **kw: port))
+    monkeypatch.setattr(serial_adapter.time, "monotonic", lambda: 0 if chunks else 2)
+    return port
+
+
+@pytest.mark.parametrize("length", [SERIAL_CAP, SERIAL_CAP + 1])
+def test_live_capture_never_returns_a_truncated_prefix(monkeypatch, length):
+    from hwcontract.serial_adapter import capture
+    port = fake_serial(monkeypatch, [b"x" * length])
+    if length > SERIAL_CAP:
+        with pytest.raises(ValueError, match="exceeds limit"):
+            capture("fake", seconds=1)
+    else:
+        assert capture("fake", seconds=1) == "x" * length
+    assert port.closed
+
+
+def test_live_capture_decodes_split_utf8_once(monkeypatch):
+    from hwcontract.serial_adapter import capture
+    port = fake_serial(monkeypatch, [b"\xc3", b"\xa9", b"\xc3"])
+    assert capture("fake", seconds=1) == "é�"
+    assert port.closed
+
+
+@pytest.mark.parametrize("seconds", [0, -1, float("inf"), float("nan"), True])
+def test_capture_duration_is_positive_finite(seconds):
+    from hwcontract.serial_adapter import capture
+    with pytest.raises(ValueError, match="seconds must be a positive finite"):
+        capture("unused", seconds=seconds)
+
+
+def test_live_capture_limit_includes_final_decoder_flush(monkeypatch):
+    from hwcontract.serial_adapter import capture
+    port = fake_serial(monkeypatch, [b"x" * SERIAL_CAP, b"\xc3"])
+    with pytest.raises(ValueError, match="exceeds limit"):
+        capture("fake", seconds=1)
+    assert port.closed

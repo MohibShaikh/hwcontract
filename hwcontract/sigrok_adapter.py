@@ -16,8 +16,10 @@ jitter. The thresholds are the calibration knobs: real strips and clone chips va
 """
 import json
 import math
+import re
 import subprocess
 import sys
+from collections.abc import Sequence
 
 # calibration knobs (ns). WS2812: 0-bit high ~350, 1-bit high ~700; lows ~800/600.
 HIGH_SPLIT = 525     # high pulse >  this => T1H, else T0H
@@ -25,8 +27,37 @@ LOW_SPLIT = 700      # low  pulse <  this => T1L, else T0L
 RESET_NS = 5000      # low pulse > this => the latch/RESET gap, not a bit
 
 
+def positive_finite(value, name):
+    """Validate numeric capture parameters without silently rounding them."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        number = float("nan")
+    if isinstance(value, bool) or not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{name} must be a positive finite number, got {value!r}")
+    return number
+
+
+def sample_period(samplerate):
+    """Sample duration in ns, for a positive finite rate in Hz."""
+    return positive_finite(1e9 / positive_finite(samplerate, "samplerate"), "dt_ns")
+
+
+def validate_samples(samples, name="samples"):
+    if not isinstance(samples, Sequence) or isinstance(samples, str):
+        raise ValueError(f"{name}: expected a sequence of 0 or 1 samples")
+    if not samples:
+        raise ValueError(f"{name}: no samples; expected non-empty 0/1 data")
+    for i, sample in enumerate(samples):
+        if sample not in (0, 1):
+            raise ValueError(f"{name}[{i}]: expected 0 or 1, got {sample!r}")
+
+
 def runs(samples, dt_ns):
     """(level, width_ns) for every run, boundary runs included."""
+    dt_ns = positive_finite(dt_ns, "dt_ns")
+    validate_samples(samples)
+    positive_finite(len(samples) * dt_ns, "capture duration")
     out, prev, n = [], samples[0], 0
     for s in samples:
         if s == prev:
@@ -64,6 +95,9 @@ def observe(samples, dt_ns, high_split=HIGH_SPLIT, low_split=LOW_SPLIT, reset_ns
     not just the median: a clean p50 with glitchy tails must not pass.
     Thresholds are the calibration knobs; defaults are WS2812. Pass DShot's
     splits to reuse this for DShot."""
+    high_split = positive_finite(high_split, "high_split")
+    low_split = positive_finite(low_split, "low_split")
+    reset_ns = positive_finite(reset_ns, "reset_ns")
     all_runs = runs(samples, dt_ns)
     interior = all_runs[1:-1]                        # drop capture-boundary partials for bit widths
     highs = [w for lvl, w in interior if lvl == 1]
@@ -86,19 +120,58 @@ def observe(samples, dt_ns, high_split=HIGH_SPLIT, low_split=LOW_SPLIT, reset_ns
     return out
 
 
+def _read_csv_lines(lines, source):
+    """One sample per row, with sigrok's comments and optional logic label."""
+    samples = []
+    labels = {"logic"}  # sigrok's default label for a digital channel
+    ambiguous_label = False
+    header_seen = False
+    for line_number, line in enumerate(lines, 1):
+        value = line.strip()
+        if not value:
+            continue
+        if value.startswith(("#", ";")):
+            # label=channel uses the name in sigrok's Channels preamble.
+            match = re.fullmatch(r"[;#]\s*Channels \(1/\d+\):\s*([^,;]+)", value)
+            if match and not samples:
+                label = match.group(1).strip()
+                if label in ("0", "1"):
+                    ambiguous_label = True
+                else:
+                    labels.add(label)
+            continue
+        if not samples and not header_seen and value in labels:
+            header_seen = True
+            continue
+        if not samples and not header_seen and ambiguous_label:
+            raise ValueError(f"{source}: line {line_number}: ambiguous numeric channel label; "
+                             "export with sigrok csv:label=units (logic header)")
+        if value not in ("0", "1"):
+            raise ValueError(f"{source}: line {line_number}: expected one 0 or 1 sample "
+                             f"per line, got {value!r}; timestamp/channel CSV is unsupported")
+        samples.append(int(value))
+    if not samples:
+        raise ValueError(f"{source}: no samples; expected one 0 or 1 sample per line")
+    return samples
+
+
 def read_csv(path):
-    return [int(t) for line in open(path)
-            for t in [line.strip()] if t in ("0", "1")]
+    with open(path) as f:
+        return _read_csv_lines(f, str(path))
 
 
 def capture(driver, channel, samplerate, samples, timeout=30):
+    sample_period(samplerate)
+    count = positive_finite(samples, "samples")
+    if not count.is_integer():
+        raise ValueError("samples must be a positive integer")
+    positive_finite(timeout, "timeout")
     cmd = ["sigrok-cli", "--driver", driver, "--channels", channel,
            "--config", f"samplerate={samplerate}",
-           "--samples", str(samples), "-O", "csv"]
+           "--samples", str(int(count)), "-O", "csv"]
     out = subprocess.run(cmd, capture_output=True, text=True,
                          check=True, timeout=timeout).stdout   # don't hang on a stuck analyzer
-    return [int(t) for line in out.splitlines()
-            for t in [line.strip()] if t in ("0", "1")]
+    return _read_csv_lines(out.splitlines(), "sigrok-cli output")
 
 
 def synth(dt_ns):
@@ -136,6 +209,11 @@ if __name__ == "__main__":
     if a.demo:
         demo()
         sys.exit(0)
-    samples = read_csv(a.csv) if a.csv else capture(a.driver, a.channel, a.samplerate, a.samples)
-    json.dump(observe(samples, 1e9 / a.samplerate), sys.stdout, indent=2)
+    try:
+        dt_ns = sample_period(a.samplerate)
+        samples = read_csv(a.csv) if a.csv else capture(a.driver, a.channel, a.samplerate, a.samples)
+        observations = observe(samples, dt_ns)
+    except ValueError as e:
+        p.error(str(e))
+    json.dump(observations, sys.stdout, indent=2)
     print()

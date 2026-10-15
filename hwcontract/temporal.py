@@ -36,7 +36,8 @@ import sys
 from statistics import quantiles
 
 from hwcontract.judge import (PASS, FAIL, ContractError, event_matches,
-                              load_contract, parse_duration, parse_selector)
+                              load_contract, parse_duration, parse_selector,
+                              validate_judge_contract)
 
 
 class EventError(ValueError):
@@ -187,6 +188,7 @@ def _check_forbid(a, triggers, events, starts):
 
 def judge_events(contract, events):
     """(results, ok) for an events contract against normalized events."""
+    validate_judge_contract(contract, "events")
     events = normalize_events(events)
     starts = [e["start_ns"] for e in events]
     results, ok = [], True
