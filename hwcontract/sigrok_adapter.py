@@ -115,7 +115,8 @@ def observe(samples, dt_ns, high_split=HIGH_SPLIT, low_split=LOW_SPLIT, reset_ns
         if not v:
             continue
         dist = _distribution(v)
-        dist.update({"name": k, "unit": "ns", "value": dist["p50"]})
+        dist.update({"name": k, "unit": "ns", "value": dist["p50"],
+                     "resolution_ns": round(dt_ns, 3)})   # widths are known to +/- one sample
         out.append(dist)
     return out
 
