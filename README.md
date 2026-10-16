@@ -20,6 +20,10 @@ Two things a green verdict gives you beyond the table:
 - **Every pulse is judged, not just the median.** Captures carry the full
   pulse distribution; a glitchy tail that a median hides comes back as
   marginal or fail, with the violating-pulse count in the hint.
+- **No verdict finer than the capture can see.** A width measured from
+  samples is only known to one sample period. FAIL needs the signal out of spec
+  by more than that, PASS needs it inside by at least that; anything closer is
+  MARGINAL with a hint to capture at a higher samplerate.
 - **Evidence on every verdict:** contract hash, capture hash, capture
   parameters, tool version, timestamp. A green build in CI traces back to the
   exact bytes that produced it.
@@ -52,9 +56,11 @@ measured on the real WS2812B signal (300000 samples @24MHz):
 
 === generic WS2812 contract -> FAIL ===
   T0H     350   333  PASS
-  T0L     800   917  FAIL      1842 of 4275 pulses out of window (43.09%)
-  T1H     700   833  MARGINAL  only 17ns from max; nudge toward typ 700
-  T1L     600   417  FAIL      183ns short (typ 600)
+  T0L     800   917  MARGINAL  within one sample (41.7ns) of max; 1842 of 4275
+                               pulses within one sample of the window
+  T1H     700   833  MARGINAL  within one sample (41.7ns) of max
+  T1L     600   417  MARGINAL  33ns past min, within one sample (41.7ns);
+                               capture at a higher samplerate to resolve
   RESET 50000 992250 PASS
 
 === matching WS2812B contract -> PASS ===
@@ -62,7 +68,9 @@ measured on the real WS2812B signal (300000 samples @24MHz):
 ```
 
 Same hardware, two contracts: the generic one fails, the chip-specific one
-passes. A WS2812B isn't a WS2812. Measure the real signal, hold it to a spec, and
+passes. The generic rows are MARGINAL rather than FAIL because at 24MHz each
+sample is 41.7ns, and every miss is smaller than that: the capture shows the
+signal is too close to the WS2812 limits, not that it is definitely past them. A WS2812B isn't a WS2812. Measure the real signal, hold it to a spec, and
 match the contract to the actual chip.
 
 ## See the temporal engine catch a DMA bug

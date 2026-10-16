@@ -123,3 +123,68 @@ def test_example_observations_file_is_distribution_shaped():
     _, ok = run({"contract": "t", "headroom_pct": 20, "edges": [
         {"name": o["name"], "min": 0, "typ": o["p50"], "max": None} for o in obs]}, obs)
     assert ok is True
+
+
+# ---- sample resolution: no verdict finer than the capture -------------------
+
+R = round(DT, 3)                                    # 41.667ns at 24MHz
+
+
+def with_resolution(o, r=R):
+    return dict(o, resolution_ns=r)
+
+
+def test_observe_records_the_sample_period():
+    for o in observe(synth(DT), DT):
+        assert o["resolution_ns"] == R
+
+
+def test_fail_needs_more_than_one_sample_past_the_window():
+    status, hint = judge(EDGE, with_resolution({"name": "T0H", "value": 200}), 20)
+    assert status == FAIL and "200ns short (typ 400)" in hint
+    status, hint = judge(EDGE, with_resolution({"name": "T0H", "value": 220}), 20)
+    assert status == MARGINAL
+    assert "30ns past min, within one sample (41.7ns)" in hint
+
+
+def test_pass_needs_one_sample_inside_the_window():
+    status, hint = judge(EDGE, with_resolution({"name": "T0H", "value": 280}), 0)
+    assert status == MARGINAL and "within one sample (41.7ns) of min" in hint
+    assert judge(EDGE, with_resolution({"name": "T0H", "value": 300}), 0) == (PASS, "")
+
+
+def test_unbounded_edge_respects_resolution_at_min():
+    reset = {"name": "RESET", "min": 50000, "typ": 50000, "max": None}
+    assert judge(reset, with_resolution({"name": "RESET", "value": 50020}), 20)[0] == MARGINAL
+    assert judge(reset, with_resolution({"name": "RESET", "value": 50100}), 20)[0] == PASS
+
+
+def test_pulses_within_one_sample_are_unresolved_not_violations():
+    # 10% of pulses 8ns past max: the capture cannot tell, so MARGINAL, not FAIL
+    o = with_resolution(obs_with_widths(400, [400.0] * 180 + [558.0] * 20))
+    status, hint = judge(EDGE, o, 20)
+    assert status == MARGINAL
+    assert "20 of 200 pulses within one sample (41.7ns) of the window" in hint
+    assert "out of window" not in hint
+
+
+def test_pulses_past_one_sample_still_fail():
+    o = with_resolution(obs_with_widths(400, [400.0] * 180 + [600.0] * 20))
+    status, hint = judge(EDGE, o, 20)
+    assert status == FAIL and "20 of 200 pulses out of window (10.0%)" in hint
+
+
+def test_run_rows_carry_resolution_and_unresolved():
+    o = with_resolution(obs_with_widths(400, [400.0] * 199 + [558.0]))
+    results, ok = run({"contract": "t", "headroom_pct": 20, "edges": [EDGE]}, [o])
+    row = results[0]
+    assert ok is False
+    assert row["resolution_ns"] == R
+    assert (row["violations"], row["unresolved"]) == (0, 1)
+
+
+def test_invalid_resolution_is_an_error():
+    import pytest
+    for bad in (-1, float("nan"), float("inf"), "41.7", True):
+        with pytest.raises(ValueError, match="resolution_ns"):
+            judge(EDGE, {"name": "T0H", "value": 400, "resolution_ns": bad}, 20)

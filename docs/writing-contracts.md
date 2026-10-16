@@ -181,6 +181,24 @@ raw widths (hand-written summaries passed to `judge_contract`) are judged on
 the median alone; the capture tools always carry widths, so live judgments
 always see the tails.
 
+### Sample resolution
+
+A width measured from a logic capture is a whole number of samples, so the true
+width is only known to plus or minus one sample period. The capture adapters
+record that period as `resolution_ns` on every observation, and the judge
+respects it:
+
+- `FAIL` needs the median outside the window by more than one sample.
+- Outside by one sample or less, or inside but within one sample of `min` or
+  `max`: `MARGINAL`, with a hint to capture at a higher samplerate.
+- Per pulse, only pulses outside by more than one sample count as violations.
+  Pulses outside by less are reported separately as `unresolved`.
+
+At 24MHz one sample is 41.7ns, which is a large slice of a WS2812's 300ns
+window. If a verdict says "within one sample", capture faster rather than
+loosening the contract. Observations without `resolution_ns` are judged
+exactly as given.
+
 ## Event contracts: cross-signal temporal assertions
 
 Pulse-window contracts judge one signal. Event contracts judge the
@@ -366,9 +384,10 @@ reset gap, or the frame ends up mid-capture and the reset never appears.
 
 Contracts are chip-specific. The bundled demo proves it with a real signal:
 `python3 -m hwcontract.demo ws2812b` downloads a genuine 24-LED capture and judges it
-against two contracts. The generic WS2812 contract fails it on T1L, measured
-417ns against a 450ns minimum, 33ns short. Same wire, same capture, and the
-WS2812B contract passes it. A WS2812B is not a WS2812: shorter lows, different
+against two contracts. The generic WS2812 contract rejects it: T1L measures
+417ns against a 450ns minimum, 33ns short. That miss is under one 41.7ns sample
+at 24MHz, so the row is MARGINAL rather than FAIL, and the verdict still fails.
+Same wire, same capture, and the WS2812B contract passes it. A WS2812B is not a WS2812: shorter lows, different
 windows. Match the contract to the exact part, and read the file header
 comments, which record the part's quirks.
 

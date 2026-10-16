@@ -381,15 +381,32 @@ def render_verdict(v, table):
             f"hwcontract {v['hwcontract_version']}\n{table}")
 
 
+def _resolution(obs):
+    """Sample period of the capture behind an observation, 0 when unknown.
+    A width measured from samples is only known to +/- one sample."""
+    r = obs.get("resolution_ns", 0)
+    if isinstance(r, bool) or not isinstance(r, (int, float)) or not math.isfinite(r) or r < 0:
+        raise ValueError(f"resolution_ns must be a finite number >= 0, got {r!r}")
+    return r
+
+
+def _outside(w, lo, hi, slack=0):
+    """True when w is outside [lo, hi] by more than slack."""
+    return w < lo - slack or (hi is not None and w > hi + slack)
+
+
 def _violations(edge, obs):
-    """(count, pct) of raw pulses outside the window, or (None, None) when the
-    observation carries no raw widths (summary-only: median-only judging)."""
+    """(count, pct, unresolved) for raw pulses, or (None, None, 0) when the
+    observation carries no raw widths (summary-only: median-only judging).
+    count/pct are pulses definitely outside the window; unresolved are outside
+    by no more than one sample, so the capture cannot tell which side they are on."""
     widths = obs.get("widths")
     if not widths:
-        return None, None
-    lo, hi = edge["min"], edge.get("max")
-    bad = sum(1 for w in widths if w < lo or (hi is not None and w > hi))
-    return bad, round(100.0 * bad / len(widths), 2)
+        return None, None, 0
+    lo, hi, r = edge["min"], edge.get("max"), _resolution(obs)
+    bad = sum(1 for w in widths if _outside(w, lo, hi, r))
+    unresolved = sum(1 for w in widths if _outside(w, lo, hi)) - bad
+    return bad, round(100.0 * bad / len(widths), 2), unresolved
 
 
 def judge(edge, obs, headroom_pct):
@@ -398,40 +415,60 @@ def judge(edge, obs, headroom_pct):
     An observation with raw widths is judged on EVERY pulse, not just the
     median: a glitchy tail escalates a clean-looking p50. Up to
     VIOLATION_FAIL_PCT percent of violating pulses keeps the edge MARGINAL;
-    beyond that it FAILs outright."""
+    beyond that it FAILs outright.
+
+    An observation with resolution_ns (the capture's sample period) is judged
+    to +/- one sample: FAIL needs the value outside the window by more than one
+    sample, PASS needs it inside by at least one. Anything closer is MARGINAL,
+    because the capture cannot tell which side of the limit it is on."""
     if obs is None:
         return MISSING, "no observation for this edge"
 
     v = obs.get("p50", obs.get("value"))
     lo, hi, typ = edge["min"], edge.get("max"), edge["typ"]
-    violations, pct = _violations(edge, obs)
+    r = _resolution(obs)
+    one_sample = f"one sample ({round(r, 1):g}ns)"
+    violations, pct, unresolved = _violations(edge, obs)
     vhint = ""
     if violations:
         vhint = f"; {violations} of {len(obs['widths'])} pulses out of window ({pct}%)"
+    if unresolved:
+        vhint += f"; {unresolved} of {len(obs['widths'])} pulses within {one_sample} of the window"
 
     if not math.isfinite(v):
         return FAIL, "non-finite measurement (NaN/inf) in the capture" + vhint
 
-    if v < lo or (hi is not None and v > hi):
+    if _outside(v, lo, hi, r):
         short = typ - v
         return FAIL, f"{abs(short)}ns {'short' if short > 0 else 'long'} (typ {typ})" + vhint
+
+    if _outside(v, lo, hi):                             # out, but by no more than one sample
+        near, past = ("min", lo - v) if v < lo else ("max", v - hi)
+        return MARGINAL, (f"{round(past, 1):g}ns past {near}, within {one_sample}; "
+                          "capture at a higher samplerate to resolve") + vhint
 
     if violations and pct > VIOLATION_FAIL_PCT:
         return FAIL, "p50 in spec but the capture violates the window" + vhint
 
-    if hi is not None:                                  # flag rail-hugging (marginal)
-        threshold = headroom_pct / 100 * (hi - lo)
-        if min(v - lo, hi - v) < threshold:
-            near = "min" if v - lo < hi - v else "max"
-            return MARGINAL, f"only {min(v - lo, hi - v)}ns from {near}; nudge toward typ {typ}" + vhint
+    room = v - lo if hi is None else min(v - lo, hi - v)
+    near = "min" if hi is None or v - lo < hi - v else "max"
+    if room < r:
+        return MARGINAL, (f"within {one_sample} of {near}; "
+                          "capture at a higher samplerate to resolve") + vhint
+    if hi is not None and room < headroom_pct / 100 * (hi - lo):   # flag rail-hugging (marginal)
+        return MARGINAL, f"only {room}ns from {near}; nudge toward typ {typ}" + vhint
 
     if violations:
         return MARGINAL, "p50 in spec but individual pulses violate the window" + vhint
 
+    if unresolved:
+        return MARGINAL, ("p50 in spec but some pulses are too close to the window to resolve; "
+                          "capture at a higher samplerate") + vhint
+
     return PASS, ""
 
 
-_DIST_KEYS = ("count", "min", "max", "p5", "p95", "jitter")
+_DIST_KEYS = ("count", "min", "max", "p5", "p95", "jitter", "resolution_ns")
 
 
 def run(contract, observations):
@@ -451,9 +488,10 @@ def run(contract, observations):
             for k in _DIST_KEYS:                        # distribution summary rides along
                 if k in obs:
                     row[k] = obs[k]
-            violations, pct = _violations(edge, obs)
+            violations, pct, unresolved = _violations(edge, obs)
             if violations is not None:
                 row["violations"], row["violation_pct"] = violations, pct
+                row["unresolved"] = unresolved
         results.append(row)
     return results, ok
 
