@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from hwcontract.judge import (load_contract, run, run_serial, render,
                               render_verdict, sha256_of, verdict)
 from hwcontract.jsontrace import from_traceevents
-from hwcontract.sigrok_adapter import observe, read_csv, sample_period
+from hwcontract.sigrok_adapter import observe, positive_finite, read_csv, sample_period
 from hwcontract.serial_adapter import read_log
 from hwcontract.temporal import judge_events, normalize_events, render_events
 
@@ -65,13 +65,15 @@ def load_events(path):
     return normalize_events(doc)
 
 
-def run_case(kind, contract, path, dt_ns):
+def run_case(kind, contract, path, samplerate_hz):
     """(name, verdict-dict, table) for one file judged against one contract."""
     cpath = resolve(contract)
     c = load_contract(cpath)
+    params = {}
     if kind == "timing":
-        results, ok = run(c, observe(read_csv(path), dt_ns))
+        results, ok = run(c, observe(read_csv(path), sample_period(samplerate_hz)))
         table = render(results)
+        params["samplerate_hz"] = samplerate_hz    # a 0/1 CSV has no time base of its own
     elif kind == "serial":
         results, ok = run_serial(c, read_log(path))
         table = render(results)
@@ -80,7 +82,7 @@ def run_case(kind, contract, path, dt_ns):
         table = render_events(results)
     with open(path, "rb") as fh:
         input_sha = sha256_of(fh.read())
-    v = verdict(cpath, results, ok, input_kind=kind, input_sha256=input_sha, file=path)
+    v = verdict(cpath, results, ok, input_kind=kind, input_sha256=input_sha, file=path, **params)
     name = f"{kind}:{contract}:{path}"
     print(f"== {name} -> {v['verdict']} ==\n{table}")
     if not ok:
@@ -108,6 +110,7 @@ def evidence_write(path, cases):
                        "input_sha256": v["input_sha256"],
                        "input_kind": v["input_kind"],
                        "file": v.get("file"),
+                       **({"samplerate_hz": v["samplerate_hz"]} if "samplerate_hz" in v else {}),
                        "hwcontract_version": v["hwcontract_version"],
                        "timestamp_utc": v["timestamp_utc"]} for name, v, _ in cases]}
     with open(path, "w") as f:
@@ -117,9 +120,12 @@ def evidence_write(path, cases):
 
 def main(argv=None):
     try:
-        dt_ns = sample_period(os.environ.get("INPUT_SAMPLERATE", "24000000"))
+        samplerate_hz = positive_finite(os.environ.get("INPUT_SAMPLERATE", "24000000"), "samplerate")
+        sample_period(samplerate_hz)
     except ValueError as e:
         raise SystemExit(f"hwcontract-action: {e}") from e
+    if samplerate_hz.is_integer():
+        samplerate_hz = int(samplerate_hz)
     kinds = (("timing", os.environ.get("INPUT_TIMING")),
              ("serial", os.environ.get("INPUT_SERIAL")),
              ("events", os.environ.get("INPUT_EVENTS")))
@@ -128,7 +134,7 @@ def main(argv=None):
         for contract, files in parse_pairs(spec, kind):
             for path in files:
                 try:
-                    cases.append(run_case(kind, contract, path, dt_ns))
+                    cases.append(run_case(kind, contract, path, samplerate_hz))
                 except ValueError as e:
                     raise SystemExit(f"hwcontract-action: {kind}:{contract}:{path}: {e}") from e
 

@@ -164,6 +164,7 @@ def test_evidence_file_carries_hashes(check, monkeypatch, tmp_path, good_csv):
     assert len(data["checks"][0]["contract_sha256"]) == 64
     assert len(data["checks"][0]["input_sha256"]) == 64
     assert data["checks"][0]["input_kind"] == "timing"
+    assert data["checks"][0]["samplerate_hz"] == 24_000_000   # the CSV's only time base
 
 
 @pytest.mark.parametrize("kind,contract,text,diagnostic", [
