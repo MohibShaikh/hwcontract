@@ -248,3 +248,18 @@ def test_malformed_contract_key_types_and_large_durations_report_problems():
     assert "within[0]" in message and "within[1]" in message
     with pytest.raises(ContractError, match="must be finite"):
         run(timing_contract(headroom_pct=10 ** 1000), [])
+
+
+def test_judge_cli_reports_bad_input_without_traceback(tmp_path):
+    import subprocess
+    import sys
+    from hwcontract.contracts import EXAMPLES
+    obs = tmp_path / "obs.json"
+    obs.write_text('[{"name": "T0H", "value": 1}, {"name": "T0H", "value": 350}]')
+    for contract, diagnostic in ((tmp_path / "nope.yaml", "No such file"),
+                                 (EXAMPLES / "ws2812.contract.yaml", "duplicate observation name"),
+                                 (EXAMPLES / "boot.contract.yaml", "expected a timing contract")):
+        r = subprocess.run([sys.executable, "-m", "hwcontract.judge", str(contract), str(obs)],
+                           capture_output=True, text=True, timeout=30, cwd=tmp_path)
+        assert r.returncode == 1 and diagnostic in r.stderr
+        assert "Traceback" not in r.stderr
