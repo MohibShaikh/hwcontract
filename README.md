@@ -239,8 +239,11 @@ on every PR:
 ```
 
 A FAIL, MARGINAL or MISSING edge fails the step, annotates the failing line,
-and writes JUnit. The action self-tests on every push to this repo with one
-clean and one deliberately broken capture.
+and writes JUnit. Timing CSVs are bucketed with the WS2812-family thresholds,
+so the Action judges WS2812-family captures only; for DShot or other timing
+protocols, pass their thresholds to the pytest plugin's `capture_csv`. The
+action self-tests on every push to this repo with one clean and one
+deliberately broken capture.
 
 Replaying an unchanged recorded capture checks the judge and contract against
 those recorded bytes. It does **not** test newly built firmware. To gate a

@@ -188,3 +188,48 @@ def test_invalid_resolution_is_an_error():
     for bad in (-1, float("nan"), float("inf"), "41.7", True):
         with pytest.raises(ValueError, match="resolution_ns"):
             judge(EDGE, {"name": "T0H", "value": 400, "resolution_ns": bad}, 20)
+
+
+def test_violation_burst_fails_when_the_median_is_unresolved():
+    # p50 8ns past max (within one sample), but 10% of pulses are definitely out
+    o = with_resolution(obs_with_widths(558, [558.0] * 180 + [700.0] * 20))
+    status, hint = judge(EDGE, o, 20)
+    assert status == FAIL
+    assert "20 of 200 pulses out of window (10.0%)" in hint
+
+
+def test_violation_threshold_is_not_rounded_away():
+    # 1001 of 100001 pulses is 1.001%, over the 1% limit, though it rounds to 1.0
+    o = obs_with_widths(400, [400.0] * 99000 + [700.0] * 1001)
+    assert judge(EDGE, o, 20)[0] == FAIL
+
+
+def test_non_finite_pulses_are_violations():
+    for bad in (float("nan"), float("inf")):
+        o = obs_with_widths(400, [400.0] * 10)
+        o["widths"] = [400.0] * 10 + [bad] * 90
+        status, hint = judge(EDGE, o, 20)
+        assert status == FAIL and "90 of 100 pulses out of window" in hint
+
+
+def test_duplicate_observation_names_are_rejected():
+    import pytest
+    contract = {"contract": "t", "headroom_pct": 20, "edges": [EDGE]}
+    with pytest.raises(ValueError, match="duplicate observation name: 'T0H'"):
+        run(contract, [{"name": "T0H", "value": 100}, {"name": "T0H", "value": 400}])
+
+
+def test_malformed_observations_list_every_problem():
+    import pytest
+    contract = {"contract": "t", "headroom_pct": 20, "edges": [EDGE]}
+    with pytest.raises(ValueError) as e:
+        run(contract, [{"name": "T0H", "value": "400"}, {"value": 1}, 7,
+                       {"name": "T1H", "value": True},
+                       {"name": "T0L", "value": 1, "widths": [1, None]}])
+    msg = str(e.value)
+    for part in ("observations[T0H].value must be a number", "observations[1].name",
+                 "observations[2] must be a mapping", "observations[T1H].value",
+                 "observations[T0L].widths must be a list of numbers"):
+        assert part in msg, part
+    with pytest.raises(ValueError, match="observations must be a list"):
+        run(contract, {"name": "T0H", "value": 400})

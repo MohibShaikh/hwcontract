@@ -24,13 +24,21 @@ def test_boot(hwcontract):
 Contracts resolve as: an existing path, then `--hwcontract-root <dir>`, then
 the 28 contracts bundled with `hwcontract` by name.
 
+`capture_csv` buckets pulses with WS2812-family thresholds by default. Pass
+the protocol's own for anything else, e.g. DShot600:
+`capture_csv(path, samplerate=24_000_000, high_split=937, low_split=730, reset_ns=1800)`.
+
 A failing verdict reads like the CLI's:
 
 ```
-Failed: hwcontract verdict FAIL (4f2b9c1a0e7d)
+AssertionError: verdict: FAIL  contract 3b714248c15e  observations fcc02d743809  hwcontract 0.6.1
 edge        typ   actual  status    hint
 ------------------------------------------------------------
-T1L         450   583     MARGINAL  only 17ns from max; nudge toward typ 450
+T0H         400      333  PASS
+T0L         850      792  PASS
+T1H         800      708  MARGINAL  only 58ns from min; nudge toward typ 800
+T1L         450      583  MARGINAL  within one sample (41.7ns) of max; capture at a higher samplerate to resolve
+RESET     50000    60583  PASS
 ```
 
 ## Why marginal fails

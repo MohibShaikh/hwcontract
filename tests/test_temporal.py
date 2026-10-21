@@ -375,3 +375,14 @@ def test_cli_roundtrip(tmp_path, capsys):
         main([str(c), str(trace)])
     assert e.value.code == 0
     assert "all" not in capsys.readouterr().out or "PASS" in capsys.readouterr().out
+
+
+def test_forbid_while_with_only_instant_spans_fails():
+    # edge events have no duration, so nothing can overlap them: not a PASS
+    events = [ev("rising", 0, source="gpio.cs", value=1),
+              ev("rising", 0, source="spi.sck", value=1)]
+    results, ok = judge_events(contract([
+        {"name": "quiet-when-idle", "forbid": "spi.sck.rising",
+         "while": "gpio.cs.rising"}]), events)
+    assert ok is False and results[0]["status"] == FAIL
+    assert "no duration" in results[0]["hint"]

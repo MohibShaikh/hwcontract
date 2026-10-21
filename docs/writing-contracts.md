@@ -181,6 +181,11 @@ raw widths (hand-written summaries passed to `judge_contract`) are judged on
 the median alone; the capture tools always carry widths, so live judgments
 always see the tails.
 
+Hand-written observations are validated before judging: names must be
+unique (a second `T0H` would otherwise replace a failing first one), and
+`p50`/`value` and every width must be a number. A NaN or infinite width counts
+as a pulse outside the window.
+
 ### Sample resolution
 
 A width measured from a logic capture is a whole number of samples, so the true
@@ -192,7 +197,8 @@ respects it:
 - Outside by one sample or less, or inside but within one sample of `min` or
   `max`: `MARGINAL`, with a hint to capture at a higher samplerate.
 - Per pulse, only pulses outside by more than one sample count as violations.
-  Pulses outside by less are reported separately as `unresolved`.
+  Pulses outside by less are reported separately as `unresolved`. More than 1%
+  violations still FAILs, even when the median is within one sample.
 
 At 24MHz one sample is 41.7ns, which is a large slice of a WS2812's 300ns
 window. If a verdict says "within one sample", capture faster rather than
@@ -254,7 +260,9 @@ Three assertion shapes:
   the window. Negative window bounds look backward. The verdict reports the
   measured trigger-to-response latency distribution (min/p50/p95/p99/max).
 - `forbid` + `while`: no forbidden event may overlap a while-event's
-  [start_ns, end_ns] span. The while-events need real durations.
+  [start_ns, end_ns] span. The while-events need real durations: a `while`
+  that matches only instant events, such as raw pin edges, FAILs because
+  nothing can overlap it. Use `when` + `forbid` + `before` for those.
 - `when` + `forbid` + `before`: no forbidden event may start in the
   `before` window preceding each trigger. This is the setup-time check.
 

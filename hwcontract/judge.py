@@ -391,8 +391,9 @@ def _resolution(obs):
 
 
 def _outside(w, lo, hi, slack=0):
-    """True when w is outside [lo, hi] by more than slack."""
-    return w < lo - slack or (hi is not None and w > hi + slack)
+    """True when w is outside [lo, hi] by more than slack. A non-finite width
+    is always outside: NaN compares false against everything."""
+    return not math.isfinite(w) or w < lo - slack or (hi is not None and w > hi + slack)
 
 
 def _violations(edge, obs):
@@ -442,12 +443,18 @@ def judge(edge, obs, headroom_pct):
         short = typ - v
         return FAIL, f"{abs(short)}ns {'short' if short > 0 else 'long'} (typ {typ})" + vhint
 
+    # compare unrounded: pct is rounded for display and 1.001% must still fail
+    burst = bool(violations) and 100 * violations > VIOLATION_FAIL_PCT * len(obs["widths"])
+
     if _outside(v, lo, hi):                             # out, but by no more than one sample
         near, past = ("min", lo - v) if v < lo else ("max", v - hi)
+        if burst:
+            return FAIL, (f"p50 {round(past, 1):g}ns past {near} and the capture "
+                          "violates the window") + vhint
         return MARGINAL, (f"{round(past, 1):g}ns past {near}, within {one_sample}; "
                           "capture at a higher samplerate to resolve") + vhint
 
-    if violations and pct > VIOLATION_FAIL_PCT:
+    if burst:
         return FAIL, "p50 in spec but the capture violates the window" + vhint
 
     room = v - lo if hi is None else min(v - lo, hi - v)
@@ -471,10 +478,44 @@ def judge(edge, obs, headroom_pct):
 _DIST_KEYS = ("count", "min", "max", "p5", "p95", "jitter", "resolution_ns")
 
 
+def _real(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def _observations_by_name(observations):
+    """{name: observation}, or ValueError listing every problem. A duplicated
+    name is rejected: a later entry must not silently replace a failing one."""
+    if not isinstance(observations, list):
+        raise ValueError(f"observations must be a list, got {type(observations).__name__}")
+    problems, by_name = [], {}
+    for i, o in enumerate(observations):
+        if not isinstance(o, dict):
+            problems.append(f"observations[{i}] must be a mapping")
+            continue
+        name = o.get("name")
+        if not isinstance(name, str) or not name:
+            problems.append(f"observations[{i}].name must be a non-empty string")
+            continue
+        if name in by_name:
+            problems.append(f"duplicate observation name: {name!r}")
+            continue
+        key = "p50" if "p50" in o else "value"
+        if not _real(o.get(key)):
+            problems.append(f"observations[{name}].{key} must be a number, got {o.get(key)!r}")
+        widths = o.get("widths")
+        if widths is not None and (not isinstance(widths, (list, tuple))
+                                   or not all(_real(w) for w in widths)):
+            problems.append(f"observations[{name}].widths must be a list of numbers")
+        by_name[name] = o
+    if problems:
+        raise ValueError("invalid observations:\n  - " + "\n  - ".join(problems))
+    return by_name
+
+
 def run(contract, observations):
     """Return (results, ok). ok is False on FAIL, MISSING, and MARGINAL: marginal is a fail."""
     validate_judge_contract(contract, "timing")
-    by_name = {o["name"]: o for o in observations}
+    by_name = _observations_by_name(observations)
     results, ok = [], True
     for edge in contract["edges"]:
         obs = by_name.get(edge["name"])
@@ -558,7 +599,10 @@ if __name__ == "__main__":
         sys.exit(0)
     if len(sys.argv) != 3:
         sys.exit(__doc__)
-    results, ok = run(load_contract(sys.argv[1]), json.load(open(sys.argv[2])))
+    try:
+        results, ok = run(load_contract(sys.argv[1]), json.load(open(sys.argv[2])))
+    except (OSError, ValueError) as e:            # ContractError and bad JSON are ValueErrors
+        sys.exit(f"hwcontract: {e}")
     v = verdict(sys.argv[1], results, ok, input_kind="observations",
                 input_sha256=sha256_of(open(sys.argv[2], "rb").read()))
     print(render_verdict(v, render(results)))

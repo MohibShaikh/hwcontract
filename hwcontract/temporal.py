@@ -141,13 +141,18 @@ def _check_forbid(a, triggers, events, starts):
     row = {"assertion": a["name"], "triggers": len(triggers), "violations": 0}
     if "while" in a:
         wsel = parse_selector(a["while"])
-        spans = [(w["start_ns"], w["end_ns"]) for w in events if event_matches(wsel, w)]
+        matched = [(w["start_ns"], w["end_ns"]) for w in events if event_matches(wsel, w)]
+        spans = [(s, b) for s, b in matched if b > s]   # an instant span can never overlap
         hits = [f for f in forbidden
                 if any(f["start_ns"] < b and f["end_ns"] > s for s, b in spans)]
         row["violations"] = len(hits)
-        if not spans:
+        if not matched:
             row["status"] = FAIL
             row["hint"] = f"no events matched while: {a['while']}"
+        elif not spans:
+            row["status"] = FAIL
+            row["hint"] = (f"while: {a['while']} events have no duration, so nothing can "
+                           "overlap them; use when+forbid+before for instant edges")
         elif hits:
             f = hits[0]
             span = next((s, b) for s, b in spans if f["start_ns"] < b and f["end_ns"] > s)
