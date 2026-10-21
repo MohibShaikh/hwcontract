@@ -31,7 +31,7 @@ the protocol's own for anything else, e.g. DShot600:
 A failing verdict reads like the CLI's:
 
 ```
-AssertionError: verdict: FAIL  contract 3b714248c15e  observations fcc02d743809  hwcontract 0.6.0
+AssertionError: verdict: FAIL  contract 3b714248c15e  observations fcc02d743809  hwcontract 0.6.1
 edge        typ   actual  status    hint
 ------------------------------------------------------------
 T0H         400      333  PASS
