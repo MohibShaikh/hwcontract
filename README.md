@@ -106,16 +106,21 @@ CLI or MCP verdict for a production check.
   servo/I2C/sensor/stepper timing, serial boot logs, and SPI pin ordering.
   They are a spec library, not 28 ready-to-use capture integrations. Verify the
   template against your exact part and its datasheet.
-- **Working capture paths:** WS2812-family pulse-width buckets, DShot600 via
-  `check_dshot`, and serial logs. DShot150/300/1200 need rate-specific adapter
-  thresholds. Servo, I2C, HC-SR04 and other timing templates need custom
-  observation adapters producing the contract's named measurements.
+- **New hardware is a YAML file.** A timing edge says what it measures on a
+  0/1 capture (`measure: high`, `low` or `period`, optionally `after:` another
+  edge), so any single-line pulse protocol (an LED chip, a DShot rate, a PWM
+  fan, a part released last week) is judged from its datasheet numbers alone.
+  No protocol is hardcoded. Multi-line timing (I2C setup/hold, STEP/DIR) still
+  needs an adapter that emits observations JSON.
+- **Every pulse is accounted for.** Each one lands on the edge whose window
+  holds it, or is blamed on the nearest window within 2x; a pulse the contract
+  cannot explain fails as `unmatched`. Failing rows say where: the time, and
+  with a frame delimiter such as RESET, the frame and how many highs came
+  before (for an LED strip, the bit index). The tool reports facts; the model
+  reading them brings the protocol knowledge.
 - **Temporal assertions on normalized events.** Raw pin transitions feed
   `spi-frame`; decoder annotations need contracts matching the decoder's
   actual sources and event types.
-- **New specifications can be YAML-only when an existing adapter emits the
-  required observations.** A new protocol may also require adapter code and
-  known-good/known-bad captures.
 - **An MCP server** your agent can call, or plain CLI commands you can run by hand.
 - **Evidence on every verdict:** contract hash, capture hash, capture parameters,
   tool version, timestamp. A green build traces back to the exact bytes.
@@ -132,7 +137,7 @@ pip install "hwcontract[untrusted]" # + google-re2 (ReDoS-immune, for untrusted 
 pip install "hwcontract[all]"       # everything
 ```
 
-Live logic-analyzer capture (`check_ws2812` / `check_dshot`) also needs
+Live logic-analyzer capture (`check_capture`) also needs
 `sigrok-cli` on PATH. Judge-only tools (`judge_contract`, `judge_serial`) need
 nothing extra.
 
@@ -141,7 +146,13 @@ hwcontract --help
 hwcontract --version
 hwcontract --list-contracts         # names, kinds, capture requirements
 hwcontract --list-contracts --json  # also includes absolute installed paths
+hwcontract --check ws2812b capture.csv --samplerate 24000000   # judge a file you have
 ```
+
+`--check` reads the file by the contract's kind: a 0/1 capture CSV (measured
+the way the contract's edges say) or observations JSON for timing, a log for
+serial, a trace for events. It exits 0 on PASS and 1 on FAIL, and `--json`
+prints the full verdict with every failing pulse's location.
 
 These commands exit immediately. Bare `hwcontract` starts the MCP stdio server
 and waits for JSON-RPC requests on stdin.
@@ -202,9 +213,9 @@ The lower-level `judge` and `temporal` module CLIs still take file paths.
 | `judge_contract` | no | Judge given observations against a timing contract. Replay / testing. |
 | `judge_serial` | no | Judge a given log string against a serial contract's expect/forbid. |
 | `judge_events` | no | Judge decoded events against temporal assertions (when/require/within, forbid/while/before). |
-| `check_ws2812` | yes | Capture a live WS2812 line **and** judge it, one call. |
-| `check_dshot` | yes | Same, for a DShot600 ESC signal. |
-| `capture_ws2812` | yes | Just capture → observations (no judging). |
+| `judge_file` | no | Judge a saved capture CSV, observations JSON, log or trace under `HWCONTRACT_ROOT`; same as `hwcontract --check`. |
+| `check_capture` | yes | Capture one live line **and** judge it against any measurable timing contract, one call. `check_ws2812` / `check_dshot` are aliases. |
+| `capture_ws2812` | yes | Just capture → WS2812-bucketed observations (no judging). |
 | `check_serial` | yes | Read a serial port for N seconds and judge the log. |
 
 Event contracts check relationships for every occurrence, with latency
@@ -239,9 +250,9 @@ on every PR:
 ```
 
 A FAIL, MARGINAL or MISSING edge fails the step, annotates the failing line,
-and writes JUnit. Timing CSVs are bucketed with the WS2812-family thresholds,
-so the Action judges WS2812-family captures only; for DShot or other timing
-protocols, pass their thresholds to the pytest plugin's `capture_csv`. The
+and writes JUnit. Timing CSVs are measured the way the contract's edges say,
+the same judging as `hwcontract --check`; contracts without `measure:` take
+observations JSON. The
 action self-tests on every push to this repo with one clean and one
 deliberately broken capture.
 
@@ -263,8 +274,10 @@ retain the firmware revision, capture parameters and verdict evidence together.
 - **`judge.py`.** The pure judge for timing and serial, plus contract validation. No hardware, no framework, cached.
 - **`temporal.py`.** Cross-event temporal assertions: selectors, signed windows, latency distributions, first-failure timestamps.
 - **`jsontrace.py`.** Imports sigrok-cli's Google Trace Event JSON into normalized events.
-- **`sigrok_adapter.py`.** Turns a logic-analyzer capture into pulse-width distributions for WS2812 and DShot.
+- **`sigrok_adapter.py`.** Reads 0/1 captures from CSV or live sigrok; its fixed WS2812 bucketing backs `capture_ws2812`.
 - **`serial_adapter.py`.** Captures a serial log, or replays a saved one.
+- **`measure.py`.** Turns a 0/1 capture into observations the way a contract's edges say, and locates every pulse. No protocol tables.
+- **`check.py`.** Judges a capture, log or trace by its contract's kind. Shared by `hwcontract --check`, the MCP tools, the pytest plugin and the GitHub Action.
 - **`server.py`.** The MCP server, stdio and HTTP JSON-RPC, stdlib only.
 - **`*.contract.yaml`.** What "correct" looks like. Human-editable, and they double as regression tests.
 

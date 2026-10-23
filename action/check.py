@@ -12,27 +12,9 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 
-from hwcontract.judge import (load_contract, run, run_serial, render,
-                              render_verdict, sha256_of, verdict)
-from hwcontract.jsontrace import from_traceevents
-from hwcontract.sigrok_adapter import observe, positive_finite, read_csv, sample_period
-from hwcontract.serial_adapter import read_log
-from hwcontract.temporal import judge_events, normalize_events, render_events
-
-BUNDLED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "hwcontract", "examples")
-
-
-def resolve(name):
-    """A path that exists wins, else a bundled example by name."""
-    if os.path.isfile(name):
-        return name
-    base = name if name.endswith(".yaml") else f"{name}.contract.yaml"
-    bundled = os.path.join(BUNDLED, base)
-    if os.path.isfile(bundled):
-        return bundled
-    raise SystemExit(f"hwcontract-action: no contract file for {name!r} "
-                     "(tried path, bundled examples)")
+from hwcontract.check import check_file, report
+from hwcontract.contracts import cli_contract
+from hwcontract.sigrok_adapter import positive_finite, sample_period
 
 
 def parse_pairs(spec, what):
@@ -57,35 +39,13 @@ def annotate(name, table):
     print(f"::error title=hwcontract {name}::{(first or 'verdict FAIL').strip()}")
 
 
-def load_events(path):
-    with open(path) as f:
-        doc = json.load(f)
-    if isinstance(doc, dict) and "traceEvents" in doc:
-        return from_traceevents(doc)
-    return normalize_events(doc)
-
-
 def run_case(kind, contract, path, samplerate_hz):
-    """(name, verdict-dict, table) for one file judged against one contract."""
-    cpath = resolve(contract)
-    c = load_contract(cpath)
-    params = {}
-    if kind == "timing":
-        results, ok = run(c, observe(read_csv(path), sample_period(samplerate_hz)))
-        table = render(results)
-        params["samplerate_hz"] = samplerate_hz    # a 0/1 CSV has no time base of its own
-    elif kind == "serial":
-        results, ok = run_serial(c, read_log(path))
-        table = render(results)
-    else:
-        results, ok = judge_events(c, load_events(path))
-        table = render_events(results)
-    with open(path, "rb") as fh:
-        input_sha = sha256_of(fh.read())
-    v = verdict(cpath, results, ok, input_kind=kind, input_sha256=input_sha, file=path, **params)
+    """(name, verdict-dict, table) for one file judged against one contract.
+    The judging itself is hwcontract.check, shared with the CLI and MCP."""
+    v, table, notes = check_file(cli_contract(contract), path, samplerate_hz, kind=kind)
     name = f"{kind}:{contract}:{path}"
-    print(f"== {name} -> {v['verdict']} ==\n{table}")
-    if not ok:
+    print(f"== {name} -> {v['verdict']} ==\n{report(v, table, notes)}")
+    if not v["ok"]:
         annotate(name, table)
     return name, v, table
 
@@ -135,7 +95,7 @@ def main(argv=None):
             for path in files:
                 try:
                     cases.append(run_case(kind, contract, path, samplerate_hz))
-                except ValueError as e:
+                except (OSError, ValueError) as e:      # unknown contract, unreadable file
                     raise SystemExit(f"hwcontract-action: {kind}:{contract}:{path}: {e}") from e
 
     junit_path = os.environ.get("INPUT_JUNIT", "")

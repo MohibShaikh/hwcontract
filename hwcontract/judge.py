@@ -2,8 +2,9 @@
 """The judge: join a hardware contract against observations -> pass/marginal/fail.
 
 Pure logic, no hardware, no framework. Imported by server.py (MCP) and runnable
-standalone:  python judge.py ws2812.contract.yaml observations.json
-              python judge.py --demo
+standalone:  python -m hwcontract.judge ws2812b observations.json
+              python -m hwcontract.judge --demo
+To judge a raw capture CSV, a serial log or an event trace: hwcontract --check.
 
 Verdicts are the four uppercase enums PASS / MARGINAL / FAIL / MISSING.
 MARGINAL is in spec but rail-hugging; it makes the overall verdict fail.
@@ -41,7 +42,8 @@ VIOLATION_FAIL_PCT = 1.0
 _TIMING_KEYS = {"contract", "kind", "unit", "headroom_pct", "edges"}
 _SERIAL_KEYS = {"contract", "kind", "expect", "forbid"}
 _EVENTS_KEYS = {"contract", "kind", "assertions"}
-_EDGE_KEYS = {"name", "min", "typ", "max"}
+_EDGE_KEYS = {"name", "min", "typ", "max", "measure", "after", "required"}
+MEASURES = ("high", "low", "period")   # what an edge times on a 0/1 capture
 _ASSERTION_KEYS = {"name", "when", "require", "within", "forbid", "while", "before"}
 
 
@@ -291,6 +293,20 @@ def validate_contract(contract):
                 problems.append(f"edges[{ename or i}]: min {lo} > typ {typ}")
             if None not in (typ, hi) and typ > hi:
                 problems.append(f"edges[{ename or i}]: typ {typ} > max {hi}")
+            if not isinstance(edge.get("required", True), bool):
+                problems.append(f"edges[{ename or i}].required must be true or false")
+            if "measure" in edge and edge["measure"] not in MEASURES:
+                problems.append(f"edges[{ename or i}].measure must be one of {', '.join(MEASURES)}, "
+                                f"got {edge['measure']!r}")
+        names = {e.get("name") for e in edges if isinstance(e, dict)}
+        for edge in edges:
+            if not isinstance(edge, dict) or "after" not in edge:
+                continue
+            if edge["after"] not in names or edge["after"] == edge.get("name"):
+                problems.append(f"edges[{edge.get('name')}].after must name another edge, "
+                                f"got {edge['after']!r}")
+            elif edge.get("measure") == "period":
+                problems.append(f"edges[{edge.get('name')}]: a period edge cannot have after")
 
     if problems:
         raise ContractError("invalid contract:\n  - " + "\n  - ".join(problems))
@@ -376,9 +392,9 @@ def verdict(contract_path, results, ok, input_kind, input_sha256, **params):
 
 
 def render_verdict(v, table):
-    return (f"verdict: {v['verdict']}  contract {v['contract_sha256'][:12]}  "
-            f"{v['input_kind']} {v['input_sha256'][:12]}  "
-            f"hwcontract {v['hwcontract_version']}\n{table}")
+    return (f"verdict: {v['verdict']}  hwcontract {v['hwcontract_version']}  "
+            f"sha256: contract {v['contract_sha256'][:12]}, "
+            f"input {v['input_sha256'][:12]}\n{table}")
 
 
 def _resolution(obs):
@@ -396,6 +412,11 @@ def _outside(w, lo, hi, slack=0):
     return not math.isfinite(w) or w < lo - slack or (hi is not None and w > hi + slack)
 
 
+def out_of_window(edge, width, resolution=0):
+    """True when one pulse is outside the edge's window by more than resolution."""
+    return _outside(width, edge["min"], edge.get("max"), resolution)
+
+
 def _violations(edge, obs):
     """(count, pct, unresolved) for raw pulses, or (None, None, 0) when the
     observation carries no raw widths (summary-only: median-only judging).
@@ -408,6 +429,26 @@ def _violations(edge, obs):
     bad = sum(1 for w in widths if _outside(w, lo, hi, r))
     unresolved = sum(1 for w in widths if _outside(w, lo, hi)) - bad
     return bad, round(100.0 * bad / len(widths), 2), unresolved
+
+
+def _span(widths):
+    """': 1792-3208ns' for the given widths, so the worst pulse shows without
+    the raw list. '' when there are none."""
+    if not widths:
+        return ""
+    a, b = round(min(widths)), round(max(widths))
+    return f": {a}ns" if a == b else f": {a}-{b}ns"
+
+
+def _reach(widths, lo, hi):
+    """', up to 2x max' or ', down to 0.5x min': how far past the limit the
+    worst pulse is, so a pulse twice too long does not read as a near miss."""
+    out = ""
+    if widths and hi and max(widths) > hi:
+        out += f", up to {max(widths) / hi:.3g}x max"
+    if widths and lo > 0 and min(widths) < lo:
+        out += f", down to {min(widths) / lo:.3g}x min"
+    return out
 
 
 def judge(edge, obs, headroom_pct):
@@ -423,6 +464,8 @@ def judge(edge, obs, headroom_pct):
     sample, PASS needs it inside by at least one. Anything closer is MARGINAL,
     because the capture cannot tell which side of the limit it is on."""
     if obs is None:
+        if edge.get("required", True) is False:
+            return PASS, "not in this capture (not required)"
         return MISSING, "no observation for this edge"
 
     v = obs.get("p50", obs.get("value"))
@@ -430,18 +473,27 @@ def judge(edge, obs, headroom_pct):
     r = _resolution(obs)
     one_sample = f"one sample ({round(r, 1):g}ns)"
     violations, pct, unresolved = _violations(edge, obs)
-    vhint = ""
-    if violations:
-        vhint = f"; {violations} of {len(obs['widths'])} pulses out of window ({pct}%)"
-    if unresolved:
-        vhint += f"; {unresolved} of {len(obs['widths'])} pulses within {one_sample} of the window"
+    n = len(obs["widths"]) if violations is not None else 0
+    bad = [w for w in obs["widths"] if math.isfinite(w) and _outside(w, lo, hi, r)] if n else []
+    uhint = f"; {unresolved} of {n} pulses within {one_sample} of the window" if unresolved else ""
+    vhint = (f"; {violations} of {n} pulses out of window ({pct}%){_span(bad)}{_reach(bad, lo, hi)}"
+             if violations
+             else "") + uhint
 
     if not math.isfinite(v):
         return FAIL, "non-finite measurement (NaN/inf) in the capture" + vhint
 
     if _outside(v, lo, hi, r):
+        inside = n - violations - unresolved if n else 0
+        if inside:          # two populations: the p50 describes neither of them
+            side = ("below min" if bad and max(bad) < lo else
+                    "above max" if bad and hi is not None and min(bad) > hi else "out of window")
+            return FAIL, (f"{violations} of {n} pulses {side}{_span(bad)}{_reach(bad, lo, hi)}; "
+                          f"{inside} of {n} in window, so the p50 mixes both") + uhint
         short = typ - v
-        return FAIL, f"{abs(short)}ns {'short' if short > 0 else 'long'} (typ {typ})" + vhint
+        near, past = ("min", lo - v) if v < lo else ("max", v - hi)
+        limit = f", {round(past, 1):g}ns past {near}" if typ not in (lo, hi) else ""
+        return FAIL, f"{abs(short)}ns {'short' if short > 0 else 'long'} (typ {typ}){limit}" + vhint
 
     # compare unrounded: pct is rounded for display and 1.001% must still fail
     burst = bool(violations) and 100 * violations > VIOLATION_FAIL_PCT * len(obs["widths"])
@@ -449,13 +501,13 @@ def judge(edge, obs, headroom_pct):
     if _outside(v, lo, hi):                             # out, but by no more than one sample
         near, past = ("min", lo - v) if v < lo else ("max", v - hi)
         if burst:
-            return FAIL, (f"p50 {round(past, 1):g}ns past {near} and the capture "
-                          "violates the window") + vhint
+            return FAIL, (f"p50 {round(past, 1):g}ns past {near} and more than "
+                          f"{VIOLATION_FAIL_PCT:g}% of pulses out of window") + vhint
         return MARGINAL, (f"{round(past, 1):g}ns past {near}, within {one_sample}; "
                           "capture at a higher samplerate to resolve") + vhint
 
     if burst:
-        return FAIL, "p50 in spec but the capture violates the window" + vhint
+        return FAIL, f"p50 in spec, but more than {VIOLATION_FAIL_PCT:g}% of pulses out of window" + vhint
 
     room = v - lo if hi is None else min(v - lo, hi - v)
     near = "min" if hi is None or v - lo < hi - v else "max"
@@ -466,7 +518,8 @@ def judge(edge, obs, headroom_pct):
         return MARGINAL, f"only {room}ns from {near}; nudge toward typ {typ}" + vhint
 
     if violations:
-        return MARGINAL, "p50 in spec but individual pulses violate the window" + vhint
+        return MARGINAL, (f"p50 in spec, but pulses out of window "
+                          f"(FAIL above {VIOLATION_FAIL_PCT:g}%)") + vhint
 
     if unresolved:
         return MARGINAL, ("p50 in spec but some pulses are too close to the window to resolve; "
@@ -522,7 +575,7 @@ def run(contract, observations):
         status, hint = judge(edge, obs, contract["headroom_pct"])
         if status != PASS:
             ok = False
-        row = {"edge": edge["name"], "typ": edge["typ"],
+        row = {"edge": edge["name"], "window": [edge["min"], edge.get("max")], "typ": edge["typ"],
                "actual": obs.get("p50", obs.get("value")) if obs else None,
                "status": status, "hint": hint}
         if obs:
@@ -567,10 +620,25 @@ def run_serial(contract, log):
     return results, ok
 
 
+def _window(r):
+    if "window" not in r:
+        return "-"
+    lo, hi = r["window"]
+    return f">={lo}" if hi is None else f"{lo}-{hi}"
+
+
 def render(results):
-    lines = [f"{'edge':<7} {'typ':>7} {'actual':>8}  {'status':<9} hint", "-" * 60]
+    """The table. Timing rows show their window, so the limits a pulse missed
+    are on screen next to the median; serial rows have none."""
+    w = max([7] + [len(str(r["edge"])) for r in results])    # 'unmatched period' is 16
+    ww = max([len("window")] + [len(_window(r)) for r in results]) if any(
+        "window" in r for r in results) else 0
+    win = (lambda s: f" {s:>{ww}}") if ww else (lambda s: "")
+    lines = [f"{'edge':<{w}}{win('window')} {'typ':>7} {'actual':>8}  {'status':<9} hint",
+             "-" * (w + 53 + (ww + 1 if ww else 0))]
     for r in results:
-        lines.append(f"{r['edge']:<7} {r['typ']:>7} {str(r['actual'] if r['actual'] is not None else '-'):>8}"
+        lines.append(f"{r['edge']:<{w}}{win(_window(r))} {r['typ']:>7} "
+                     f"{str(r['actual'] if r['actual'] is not None else '-'):>8}"
                      f"  {r['status']:<9} {r['hint']}")
     return "\n".join(lines)
 
@@ -599,11 +667,13 @@ if __name__ == "__main__":
         sys.exit(0)
     if len(sys.argv) != 3:
         sys.exit(__doc__)
+    from hwcontract.contracts import cli_contract       # contracts imports judge
     try:
-        results, ok = run(load_contract(sys.argv[1]), json.load(open(sys.argv[2])))
+        path = cli_contract(sys.argv[1])
+        results, ok = run(load_contract(path), json.load(open(sys.argv[2])))
     except (OSError, ValueError) as e:            # ContractError and bad JSON are ValueErrors
         sys.exit(f"hwcontract: {e}")
-    v = verdict(sys.argv[1], results, ok, input_kind="observations",
+    v = verdict(path, results, ok, input_kind="observations",
                 input_sha256=sha256_of(open(sys.argv[2], "rb").read()))
     print(render_verdict(v, render(results)))
     sys.exit(0 if ok else 1)

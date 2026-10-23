@@ -110,7 +110,7 @@ def test_unknown_contract_is_a_clean_error(check, monkeypatch, tmp_path, good_cs
     set_env(monkeypatch, tmp_path, timing=f"nonexistent-part={good_csv}")
     with pytest.raises(SystemExit) as e:
         check.main()
-    assert "no contract file" in str(e.value)
+    assert "no contract for 'nonexistent-part'" in str(e.value)
 
 
 def test_no_checks_at_all_is_a_clean_error(check, monkeypatch, tmp_path):
@@ -203,3 +203,17 @@ def test_action_rejects_invalid_samplerate(check, monkeypatch, tmp_path, rate):
     monkeypatch.setenv("INPUT_SAMPLERATE", rate)
     with pytest.raises(SystemExit, match="samplerate must be a positive finite"):
         check.main()
+
+
+def test_dshot_csv_uses_dshot_thresholds(check, monkeypatch, tmp_path, capsys):
+    # the Action shares hwcontract.check, so a DShot capture is not bucketed as WS2812
+    dt, s = DT, [0] * round(20000 / DT)
+    for i in range(16):
+        high = 1250 if i % 2 == 0 else 625
+        s += [1] * round(high / dt) + [0] * round((1667 - high) / dt)
+    s += [0] * round(20000 / dt) + [1]
+    p = tmp_path / "esc.csv"
+    p.write_text("\n".join(map(str, s)) + "\n")
+    set_env(monkeypatch, tmp_path, timing=f"dshot={p}")
+    assert check.main() == 0
+    assert "all 1 checks PASS" in capsys.readouterr().out
