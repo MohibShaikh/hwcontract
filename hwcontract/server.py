@@ -24,11 +24,13 @@ import sys
 
 from hwcontract import __version__
 from hwcontract.judge import (load_contract, run, run_serial, render,
-                              evidence, sha256_of)
+                              evidence, sha256_of, validate_judge_contract)
+from hwcontract.measure import measures
 from hwcontract.sigrok_adapter import capture, observe
 from hwcontract.temporal import judge_events, render_events
 from hwcontract import serial_adapter
-from hwcontract.contracts import list_contracts, resolve_contract
+from hwcontract.check import check_file, judge_samples, report
+from hwcontract.contracts import cli_contract, list_contracts, resolve_contract
 
 MODERN_VERSION = "2026-07-28"
 LEGACY_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
@@ -36,16 +38,15 @@ SERVER_INFO = {"name": "hwcontract", "version": __version__}
 CAPABILITIES = {"tools": {}}
 INSTRUCTIONS = ("Use list_contracts to discover bundled templates and capture support. "
                 "Judges accept a bundled name or a contract path under HWCONTRACT_ROOT. "
-                "check_/capture_ tools need sigrok or a serial port attached.")
+                "judge_file judges a saved capture CSV, log or trace under that root. "
+                "check_/capture_ tools need sigrok or a serial port attached. A contract "
+                "you write from a datasheet works the same as a bundled one.")
 
 # _meta keys: the first two are required on every modern request, the third is
 # what a modern result answers with.
 _V = "io.modelcontextprotocol/protocolVersion"
 _CAPS = "io.modelcontextprotocol/clientCapabilities"
 _SRV = "io.modelcontextprotocol/serverInfo"
-
-# DShot600 pulse-width thresholds for the shared timing adapter (ns).
-DSHOT600 = {"high_split": 937, "low_split": 730, "reset_ns": 1800}
 
 # ---- security boundary: this server is called by an LLM that can be prompt-
 # injected, so every argument is treated as hostile ------------------------------
@@ -55,6 +56,7 @@ EXAMPLES = os.path.join(_HERE, "examples")     # bundled example contracts, foun
 # i.e. the user's project). Override with HWCONTRACT_ROOT. Traversal outside -> rejected.
 ROOT = os.path.realpath(os.environ.get("HWCONTRACT_ROOT", os.getcwd()))
 MAX_SAMPLES, MAX_SECONDS, MAX_SR = 5_000_000, 60, 500_000_000
+MAX_FILE_BYTES = 64 * 1024 * 1024                  # judge_file input
 _TOKEN = re.compile(r"^[A-Za-z0-9:_./=-]{1,64}$")   # driver/channel/port charset
 
 # Kill switch: set HWCONTRACT_SAFE=1, or drop a file named KILLSWITCH next to this
@@ -119,7 +121,30 @@ def tool_judge_events(contract_path, events):
     return out
 
 
+def _file(p):
+    """A regular file under ROOT after symlink resolution, within the size cap."""
+    if not isinstance(p, str) or not p or "\x00" in p:
+        raise ValueError("path must be a non-empty string")
+    real = os.path.realpath(os.path.join(ROOT, p))
+    if os.path.commonpath([real, ROOT]) != ROOT:
+        raise ValueError(f"path escapes allowed root: {p}")
+    if not os.path.isfile(real):
+        raise ValueError(f"not a regular file: {p}")
+    if os.path.getsize(real) > MAX_FILE_BYTES:
+        raise ValueError(f"file exceeds {MAX_FILE_BYTES} bytes: {p}")
+    return real
+
+
+def tool_judge_file(contract_path, path, samplerate=None):
+    v, table, notes = check_file(_path(contract_path), _file(path), samplerate)
+    ev = {k: v[k] for k in ("contract_sha256", "input_kind", "input_sha256", "samplerate_hz",
+                            "hwcontract_version", "timestamp_utc") if k in v}
+    return {"ok": v["ok"], "verdict": v["verdict"], "results": v["results"], "table": table,
+            "notes": notes, "evidence": ev}
+
+
 def _capture(driver, channel, samplerate, samples):
+    """(samples, samplerate, capture evidence) from a live sigrok capture."""
     _guard()
     drv, chan = _tok("driver", driver), _tok("channel", channel)
     sr = _int(samplerate, MAX_SR)
@@ -127,34 +152,24 @@ def _capture(driver, channel, samplerate, samples):
     cap_ev = {"driver": drv, "channel": chan,
               "samplerate_hz": sr, "samples": len(raw),
               "capture_sha256": sha256_of("".join(map(str, raw)))}
-    return observe(raw, 1e9 / sr), cap_ev
+    return raw, sr, cap_ev
 
 
 def tool_capture_ws2812(driver="fx2lafw", channel="D0",
                         samplerate=24_000_000, samples=200_000):
-    obs, cap_ev = _capture(driver, channel, samplerate, samples)
-    return {"observations": obs, "capture": cap_ev}
+    raw, sr, cap_ev = _capture(driver, channel, samplerate, samples)
+    return {"observations": observe(raw, 1e9 / sr), "capture": cap_ev}
 
 
-def tool_check_ws2812(contract_path, driver="fx2lafw", channel="D0",
-                      samplerate=24_000_000, samples=200_000):
-    obs, cap_ev = _capture(driver, channel, samplerate, samples)
-    return _summarize(*run(load_contract(_path(contract_path)), obs),
-                      evidence(_path(contract_path), **cap_ev))
-
-
-def tool_check_dshot(contract_path, driver="fx2lafw", channel="D0",
-                     samplerate=24_000_000, samples=200_000):
-    _guard()
-    sr = _int(samplerate, MAX_SR)
-    raw = capture(_tok("driver", driver), _tok("channel", channel),
-                  sr, _int(samples, MAX_SAMPLES))
-    obs = observe(raw, 1e9 / sr, **DSHOT600)
-    cap_ev = {"driver": _tok("driver", driver), "channel": _tok("channel", channel),
-              "samplerate_hz": sr, "samples": len(raw), "protocol": "dshot600",
-              "capture_sha256": sha256_of("".join(map(str, raw)))}
-    return _summarize(*run(load_contract(_path(contract_path)), obs),
-                      evidence(_path(contract_path), **cap_ev))
+def tool_check_capture(contract_path, driver="fx2lafw", channel="D0",
+                       samplerate=24_000_000, samples=200_000):
+    path = _path(contract_path)
+    c = load_contract(path)
+    validate_judge_contract(c, "timing")
+    measures(c)                                  # unmeasurable: fail before touching hardware
+    raw, sr, cap_ev = _capture(driver, channel, samplerate, samples)
+    results, ok, _, notes = judge_samples(c, raw, sr)
+    return {**_summarize(results, ok, evidence(path, **cap_ev)), "notes": notes}
 
 
 def tool_check_serial(contract_path, port, baud=115200, seconds=3.0):
@@ -188,24 +203,43 @@ TOOLS = {
                                   "observations": {"type": "array", "items": {"type": "object"}}},
                    "required": ["contract_path", "observations"]},
     },
+    "judge_file": {
+        "fn": tool_judge_file,
+        "description": "Judge a saved file under HWCONTRACT_ROOT against a contract, read by "
+                       "the contract's kind: a 0/1 capture CSV (needs samplerate in Hz; "
+                       "measured like check_capture) or observations JSON for timing, a log "
+                       "for serial, a trace JSON for events. No hardware.",
+        "schema": {"type": "object",
+                   "properties": {"contract_path": _STR, "path": _STR,
+                                  "samplerate": {"type": ["number", "string"]}},
+                   "required": ["contract_path", "path"]},
+    },
     "capture_ws2812": {
         "fn": tool_capture_ws2812,
         "description": "Capture the WS2812 data line via sigrok and return measured "
                        "pulse-width observations (T0H/T1H/...).",
         "schema": {"type": "object", "properties": dict(_CAP)},
     },
+    "check_capture": {
+        "fn": tool_check_capture,
+        "description": "Capture one live logic line via sigrok AND judge it against a timing "
+                       "contract, measured the way the contract's edges say (WS2812, DShot, "
+                       "PWM, or any contract with measure: high/low/period). Failing rows "
+                       "locate their pulses; pulses no edge explains fail as 'unmatched'.",
+        "schema": {"type": "object",
+                   "properties": {"contract_path": _STR, **_CAP},
+                   "required": ["contract_path"]},
+    },
     "check_ws2812": {
-        "fn": tool_check_ws2812,
-        "description": "Capture a live WS2812 signal AND judge it against a contract in "
-                       "one call. The one-shot an agent reaches for.",
+        "fn": tool_check_capture,
+        "description": "Same as check_capture; kept for existing clients.",
         "schema": {"type": "object",
                    "properties": {"contract_path": _STR, **_CAP},
                    "required": ["contract_path"]},
     },
     "check_dshot": {
-        "fn": tool_check_dshot,
-        "description": "Capture a live DShot600 ESC signal AND judge it against a contract "
-                       "in one call.",
+        "fn": tool_check_capture,
+        "description": "Same as check_capture; kept for existing clients.",
         "schema": {"type": "object",
                    "properties": {"contract_path": _STR, **_CAP},
                    "required": ["contract_path"]},
@@ -591,34 +625,96 @@ def selftest():
     print("\nself-check OK")
 
 
+_EPILOG = """\
+a part with no bundled contract: write one from its datasheet (times in ns)
+and pass its path to --check. Each edge says what it measures on the line:
+
+  contract: my-part
+  headroom_pct: 10   # required: this % of the window near a limit is MARGINAL
+                     # (bundled LED contracts use 20, DShot 15)
+  edges:
+    - {name: ZERO, measure: high, min: 2500, typ: 3000, max: 3500}
+    - {name: ONE,  measure: high, min: 8000, typ: 9000, max: 10000}
+    - {name: SPACE, measure: low, min: 3500, typ: 4000, max: 4500}
+    - {name: GAP,  measure: low, min: 100000, typ: 100000, max: null}
+
+  measure: high | low | period (rising edge to rising edge within a frame,
+                                 e.g. a bit period TH+TL)
+  after: EDGE      only the run right after EDGE (T1L is after T1H)
+  required: false  explains pulses when present, absence is not MISSING
+  T0H/T1H/T0L/T1L/RESET need no measure. To start from a bundled contract,
+  copy the YAML at its "path" in --list-contracts --json.
+
+results: each run goes to the edge whose window holds it, else is blamed on the
+nearest edge; more than 2x outside every window of its kind it is "unmatched"
+and fails, together with the out-of-window pulses that continue its spread
+(one row per problem). actual is the median (p50) of the pulses an edge got;
+the hint counts the ones out of window. A run cut off by the capture's start
+or end counts only for an open-ended edge, once it reaches that edge's min,
+and only when the capture holds no complete run of that edge.
+
+failing rows locate their pulses: "at 1.4ms (frame 2, after 1019 highs)" is the
+time in the capture, the frame (counted at each reset-like gap: an open-ended
+low edge such as RESET) and the high pulses before it in that frame. For an LED
+strip that is the bit index: LED 1019 // 24 = 42, bit 1019 % 24 = 11.
+The table shows the first; --json lists up to 20 per row.
+
+demos: python -m hwcontract.demo ws2812b (downloaded real capture),
+       python -m hwcontract.demo spi (offline synthetic frames)"""
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Hardware contract judges and MCP server (default: stdio).",
-        epilog="Demos: python -m hwcontract.demo ws2812b (downloaded real capture), "
-               "or python -m hwcontract.demo spi (offline synthetic frames).")
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_EPILOG)
     parser.add_argument("--version", action="version", version=f"hwcontract {__version__}")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--selftest", action="store_true", help="run the offline MCP self-test and exit")
     modes.add_argument("--http", type=int, metavar="PORT", help="serve MCP HTTP on localhost")
     modes.add_argument("--list-contracts", action="store_true", help="list bundled templates and capture requirements")
-    parser.add_argument("--json", action="store_true", help="emit --list-contracts as JSON")
-    args = parser.parse_args(argv)
-    if args.json and not args.list_contracts:
-        parser.error("--json requires --list-contracts")
+    modes.add_argument("--check", nargs=2, metavar=("CONTRACT", "FILE"),
+                       help="judge one file against a contract (bundled name or path): a 0/1 "
+                            "capture CSV or observations JSON for timing, a log for serial, a "
+                            "trace for events. Exit 0 on PASS, 1 on FAIL")
+    parser.add_argument("--samplerate", metavar="HZ",
+                        help="with --check on a capture CSV: the rate it was taken at "
+                             "(24000000, 24e6 or 24MHz)")
+    parser.add_argument("--json", action="store_true", help="emit --list-contracts or --check as JSON")
+    args, extra = parser.parse_known_args(argv)
+    if extra:           # 'hwcontract list', 'hwcontract check ...': there are no subcommands
+        parser.error(f"unrecognized arguments: {' '.join(extra)}. hwcontract takes flags only: "
+                     "--list-contracts, --check CONTRACT FILE --samplerate HZ, --help")
+    if args.json and not (args.list_contracts or args.check):
+        parser.error("--json requires --list-contracts or --check")
+    if args.samplerate is not None and not args.check:
+        parser.error("--samplerate requires --check")
     if args.http is not None and not 1 <= args.http <= 65535:
         parser.error("--http PORT must be between 1 and 65535")
     if args.selftest:
         selftest()
     elif args.http is not None:
         serve_http(args.http)
+    elif args.check:
+        contract, path = args.check
+        try:
+            v, table, notes = check_file(cli_contract(contract), path, args.samplerate)
+        except (OSError, ValueError) as e:          # ContractError and bad JSON are ValueErrors
+            parser.exit(2, f"hwcontract: {e}\n")
+        print(json.dumps(v, indent=2) if args.json else report(v, table, notes))
+        sys.exit(0 if v["ok"] else 1)
     elif args.list_contracts:
         entries = list_contracts()
         if args.json:
             print(json.dumps(entries, indent=2))
         else:
-            print(f"{len(entries)} bundled contract templates (not all have capture adapters):")
+            print(f"{len(entries)} bundled contract templates (not all can be measured from a capture):")
             for entry in entries:
-                print(f"{entry['name']:<20} {entry['kind']:<7} {entry['capture_path']}")
+                label = entry["name"]
+                if entry["contract"] != label:          # either name works
+                    label += f" ({entry['contract']})"
+                print(f"{label:<32} {entry['kind']:<7} {entry['capture_path']}")
+            print("\njudge a file: hwcontract --check NAME FILE [--samplerate HZ]")
     else:
         try:
             serve(sys.stdin, sys.stdout)                 # default: stdio

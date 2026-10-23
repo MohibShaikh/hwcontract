@@ -1,11 +1,12 @@
 """Discover bundled contract templates and resolve MCP paths without widening ROOT."""
+import os
 from pathlib import Path
 
 from hwcontract.judge import load_contract
+from hwcontract.measure import measures
 
 EXAMPLES = Path(__file__).resolve().parent / "examples"
 _SUFFIX = ".contract.yaml"
-_LED = {"ws2812", "ws2812b", "ws2812b_mini", "ws2813", "sk6812"}
 
 
 def bundled_paths():
@@ -13,6 +14,28 @@ def bundled_paths():
     # entry symlink to grant access to an arbitrary file outside the root.
     return {p.name: p for p in sorted(EXAMPLES.glob("*" + _SUFFIX))
             if p.is_file() and not p.is_symlink()}
+
+
+def bundled_contract(name):
+    """Installed path of a bundled contract, by filename stem (``dshot``),
+    filename (``dshot.contract.yaml``) or the name inside it (``dshot600``).
+    None when nothing matches."""
+    bundled = bundled_paths()
+    filename = name if name.endswith(".yaml") else name + _SUFFIX
+    if filename in bundled:
+        return str(bundled[filename])
+    for path in bundled.values():
+        if load_contract(str(path))["contract"] == name:
+            return str(path)
+    return None
+
+
+def _measurable(contract):
+    try:
+        measures(contract)
+    except ValueError:
+        return False
+    return True
 
 
 def list_contracts():
@@ -23,17 +46,13 @@ def list_contracts():
         contract = load_contract(str(path))
         kind = contract.get("kind", "timing")
         if kind == "serial":
-            adapter = "serial log replay / check_serial"
+            adapter = "log file: --check; live: MCP check_serial"
         elif kind == "events":
-            adapter = "raw CS/SCK/MOSI edges; see writing-contracts guide"
-        elif name in _LED:
-            adapter = "WS2812-family pulse buckets / check_ws2812; verify thresholds"
-        elif name == "dshot":
-            adapter = "DShot600 pulse buckets / check_dshot"
-        elif name.startswith("dshot"):
-            adapter = "pulse buckets with custom rate-specific thresholds (not check_dshot)"
+            adapter = "trace JSON: --check; raw CS/SCK/MOSI edges, see writing-contracts guide"
+        elif _measurable(contract):
+            adapter = "0/1 CSV: --check --samplerate HZ; live: MCP check_capture (sigrok)"
         else:
-            adapter = "custom observation adapter required"
+            adapter = "observations JSON: --check; edges need measure: to judge a CSV"
         entries.append({"name": name, "contract": contract["contract"],
                         "kind": kind, "path": str(path), "capture_path": adapter})
     return entries
@@ -63,10 +82,18 @@ def resolve_contract(value, root):
         if not candidate.is_file():
             raise ValueError(f"contract path is not a regular file: {value}")
         return str(resolved)
-    if value == supplied.name:
-        filename = value if value.endswith(".yaml") else value + _SUFFIX
-        if filename in bundled:
-            return str(bundled[filename])
+    found = bundled_contract(value) if value == supplied.name else None
+    if found:
+        return found
     raise FileNotFoundError(
         f"no contract for {value!r} under {root} or in bundled templates; "
         "use hwcontract --list-contracts or the list_contracts MCP tool")
+
+
+def cli_contract(value):
+    """Shell resolution: the user's own file wherever it is, else a bundled
+    name. No root here: a shell user may read their own files. Only a bare
+    name (no directory part) falls back to the bundled templates."""
+    if os.path.isfile(value) or Path(value).name != value:
+        return value
+    return resolve_contract(value, os.getcwd())

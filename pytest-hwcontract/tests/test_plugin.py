@@ -164,6 +164,31 @@ def test_capture_csv_helper(pytester):
     pytester.runpytest().assert_outcomes(passed=1)
 
 
+def test_check_reads_a_capture_by_its_contract(pytester):
+    # 1-bit highs at 62.5% duty: a DShot600 fault, judged with DShot thresholds
+    dt = 1e9 / 24_000_000
+    def frame(one_high):
+        s = [0] * round(20000 / dt)
+        for i in range(16):
+            high = one_high if i % 2 == 0 else 625
+            s += [1] * round(high / dt) + [0] * round((1667 - high) / dt)
+        return "\n".join(map(str, s + [0] * round(20000 / dt) + [1])) + "\n"
+    pytester.makefile(".csv", good=frame(1250), short=frame(1042))
+    pytester.makepyfile(
+        """
+        import pytest
+
+        def test_good(hwcontract):
+            hwcontract.check("dshot", "good.csv", samplerate="24MHz")
+            assert hwcontract.evidence["verdict"] == "PASS"
+
+        def test_short(hwcontract):
+            with pytest.raises(AssertionError, match="T1H"):
+                hwcontract.check("dshot600", "short.csv", samplerate=24_000_000)
+        """)
+    pytester.runpytest().assert_outcomes(passed=2)
+
+
 @pytest.mark.parametrize("method,contract,data", [
     ("serial", "ws2812b", "panic"),
     ("timing", "boot", []),

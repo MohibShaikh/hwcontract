@@ -66,14 +66,15 @@ def test_violation_burst_fails_even_with_clean_median():
     widths = [400.0] * 195 + [700.0] * 5
     status, hint = judge(EDGE, obs_with_widths(400, widths), 20)
     assert status == FAIL
-    assert "p50 in spec but the capture violates the window" in hint
+    assert "p50 in spec, but more than 1% of pulses out of window" in hint
 
 
 def test_violations_annotate_an_already_failing_edge():
     widths = [340.0] * 198 + [700.0] * 2
     status, hint = judge(EDGE, obs_with_widths(700, widths), 20)  # p50 out too
     assert status == FAIL
-    assert "long (typ 400)" in hint and "2 of 200 pulses out of window" in hint
+    assert hint == ("2 of 200 pulses above max: 700ns, up to 1.27x max; "
+                    "198 of 200 in window, so the p50 mixes both")
 
 
 def test_summary_only_observation_judges_on_median():

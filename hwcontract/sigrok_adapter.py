@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Turn a logic-analyzer capture of a WS2812 data line into observations JSON.
+"""Logic-analyzer I/O: read 0/1 captures (CSV or live sigrok) into pulse runs.
 
-    # live capture (needs sigrok-cli + a $10 fx2lafw analyzer on D0):
-    python sigrok_adapter.py --driver fx2lafw --channel D0 --samplerate 24000000 \
-        --samples 200000 > observations.json
-    python assert.py ws2812.contract.yaml observations.json
+observe() is the fixed WS2812-style bucketing behind capture_ws2812 and the
+pytest plugin's capture_csv. Judging a capture against a contract goes through
+`hwcontract --check`, which measures it the way the contract says
+(hwcontract/measure.py).
 
-    # offline: feed a CSV of one 0/1 sample per line (for testing / replay):
-    python sigrok_adapter.py --csv capture.csv --samplerate 24000000 > observations.json
-    python sigrok_adapter.py --demo        # self-check, no hardware
+    python -m hwcontract.sigrok_adapter --csv capture.csv --samplerate 24000000 > observations.json
+    python -m hwcontract.sigrok_adapter --driver fx2lafw --channel D0 \
+        --samplerate 24000000 --samples 200000 > observations.json   # needs sigrok-cli
+    python -m hwcontract.sigrok_adapter --demo        # self-check, no hardware
 
-We measure every HIGH/LOW pulse width, split highs and lows into two clusters by
-a threshold (short=0-bit, long=1-bit), and report the median of each -> robust to
-jitter. The thresholds are the calibration knobs: real strips and clone chips vary.
+observe() sorts highs into 0/1 bits by a threshold, files each low under the
+bit it follows, and reports every bucket's full distribution.
 """
 import json
 import math
@@ -23,7 +23,7 @@ from collections.abc import Sequence
 
 # calibration knobs (ns). WS2812: 0-bit high ~350, 1-bit high ~700; lows ~800/600.
 HIGH_SPLIT = 525     # high pulse >  this => T1H, else T0H
-LOW_SPLIT = 700      # low  pulse <  this => T1L, else T0L
+LOW_SPLIT = 700      # a low with no high before it: <  this => T1L, else T0L
 RESET_NS = 5000      # low pulse > this => the latch/RESET gap, not a bit
 
 
@@ -80,7 +80,7 @@ def _pctl(sorted_vals, p):
     return sorted_vals[f] * (c - k) + sorted_vals[c] * (k - f)
 
 
-def _distribution(widths):
+def distribution(widths):
     """Summary of one edge's pulse widths: count, spread, percentiles, jitter."""
     s = sorted(widths)
     p5, p50, p95 = _pctl(s, 5), _pctl(s, 50), _pctl(s, 95)
@@ -94,27 +94,32 @@ def observe(samples, dt_ns, high_split=HIGH_SPLIT, low_split=LOW_SPLIT, reset_ns
     distribution. The judge checks every pulse against the contract windows,
     not just the median: a clean p50 with glitchy tails must not pass.
     Thresholds are the calibration knobs; defaults are WS2812. Pass DShot's
-    splits to reuse this for DShot."""
+    splits to reuse this for DShot.
+
+    A low belongs to the bit whose high it follows: T1L is the low after a
+    1-bit high, however long it is, so a stretched low is blamed on the right
+    row. low_split only sorts a low with no high before it in the capture."""
     high_split = positive_finite(high_split, "high_split")
     low_split = positive_finite(low_split, "low_split")
     reset_ns = positive_finite(reset_ns, "reset_ns")
     all_runs = runs(samples, dt_ns)
-    interior = all_runs[1:-1]                        # drop capture-boundary partials for bit widths
-    highs = [w for lvl, w in interior if lvl == 1]
-    lows = [w for lvl, w in interior if lvl == 0 and w <= reset_ns]
-    buckets = {
-        "T0H": [w for w in highs if w <= high_split],
-        "T1H": [w for w in highs if w > high_split],
-        "T1L": [w for w in lows if w < low_split],
-        "T0L": [w for w in lows if w >= low_split],
-        # RESET scanned across ALL runs so a latch gap at the capture edge isn't lost
-        "RESET": [w for lvl, w in all_runs if lvl == 0 and w > reset_ns],
-    }
+    buckets = {"T0H": [], "T1H": [], "T1L": [], "T0L": []}
+    bit = None                                       # the bit whose low comes next
+    for lvl, w in all_runs[1:-1]:                    # drop capture-boundary partials for bit widths
+        if lvl == 1:
+            bit = "1" if w > high_split else "0"
+            buckets[f"T{bit}H"].append(w)
+            continue
+        if w <= reset_ns:
+            buckets[f"T{bit or ('1' if w < low_split else '0')}L"].append(w)
+        bit = None
+    # RESET scanned across ALL runs so a latch gap at the capture edge isn't lost
+    buckets["RESET"] = [w for lvl, w in all_runs if lvl == 0 and w > reset_ns]
     out = []
     for k, v in buckets.items():
         if not v:
             continue
-        dist = _distribution(v)
+        dist = distribution(v)
         dist.update({"name": k, "unit": "ns", "value": dist["p50"],
                      "resolution_ns": round(dt_ns, 3)})   # widths are known to +/- one sample
         out.append(dist)
@@ -202,7 +207,9 @@ if __name__ == "__main__":
     p.add_argument("--csv")
     p.add_argument("--driver", default="fx2lafw")
     p.add_argument("--channel", default="D0")
-    p.add_argument("--samplerate", type=int, default=24_000_000)
+    p.add_argument("--samplerate", type=int,
+                   help="Hz; required with --csv (a 0/1 CSV has no time base), "
+                        "default 24000000 for a live capture")
     p.add_argument("--samples", type=int, default=200_000)
     p.add_argument("--demo", action="store_true")
     a = p.parse_args()
@@ -210,6 +217,10 @@ if __name__ == "__main__":
     if a.demo:
         demo()
         sys.exit(0)
+    if a.samplerate is None:
+        if a.csv:
+            p.error("--csv needs --samplerate: the rate the capture was taken at, in Hz")
+        a.samplerate = 24_000_000
     try:
         dt_ns = sample_period(a.samplerate)
         samples = read_csv(a.csv) if a.csv else capture(a.driver, a.channel, a.samplerate, a.samples)
