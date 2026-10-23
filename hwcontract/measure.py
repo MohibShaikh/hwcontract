@@ -21,14 +21,23 @@ holds no complete run of that edge; otherwise it is ignored. The idle a capture
 starts in then stands in for a reset when there is no other, but never passes
 for a good gap between frames when the real gaps are short.
 
+Out-of-window pulses that continue an unmatched spread of widths (each within
+CLUSTER_RATIO of the next) join it, so one stall population is one unmatched
+row instead of a few violations on each edge plus an unmatched row split off at
+TOLERANCE. An edge never gives up its last pulses this way.
+
 Each pulse is located by its start time. When the contract has a frame
 delimiter (an open-ended edge longer than every bounded edge of its measure,
 like RESET), pulses also carry the frame number and how many highs of that
 frame came before them; for an LED strip that is the bit index.
 """
+from bisect import bisect_left
+
+from hwcontract.judge import out_of_window
 from hwcontract.sigrok_adapter import distribution, runs
 
 TOLERANCE = 2.0
+CLUSTER_RATIO = 1.5                 # widths further apart than this are separate problems
 _CLASSIC = {"T0H": ("high", None), "T1H": ("high", None),
             "T0L": ("low", "T0H"), "T1L": ("low", "T1H"), "RESET": ("low", None)}
 
@@ -73,6 +82,32 @@ def _assign(w, candidates, same_measure, edges):
     return min(candidates, key=lambda n: _distance(w, edges[n]), default=None)
 
 
+def _joins(w, widths):
+    """True when w is within CLUSTER_RATIO of any of the sorted widths."""
+    i = bisect_left(widths, w)
+    return any(max(w, u) <= CLUSTER_RATIO * min(w, u) for u in widths[max(i - 1, 0):i + 1])
+
+
+def _absorb(pulses, unmatched, spec, edges, dt_ns):
+    """Move out-of-window pulses that continue an unmatched spread into it,
+    repeating until nothing more joins. An edge keeps its pulses when it would
+    lose all of them: then it is the edge that is wrong, not a few outliers."""
+    for kind, stray in unmatched.items():
+        names = [n for n, (m, _) in spec.items() if m == kind]
+        moved = True
+        while moved:
+            moved = False
+            widths = sorted(p["width_ns"] for p in stray)
+            for n in names:
+                out = [p for p in pulses[n] if out_of_window(edges[n], p["width_ns"], dt_ns)
+                       and _joins(p["width_ns"], widths)]
+                if out and len(out) < len(pulses[n]):
+                    gone = {id(p) for p in out}
+                    pulses[n][:] = [p for p in pulses[n] if id(p) not in gone]
+                    stray.extend(out)
+                    moved = True
+
+
 def _delimiters(spec, edges):
     """Open-ended edges longer than every bounded edge of the same measure."""
     out = set()
@@ -86,7 +121,8 @@ def _delimiters(spec, edges):
 
 def measure(contract, samples, dt_ns):
     """(observations, pulses, unmatched). observations are what the judge takes;
-    pulses maps each edge to its located pulses, unmatched each measure to the
+    pulses maps each edge to its located pulses (cut_off ones not counted when
+    the edge has whole ones), unmatched each measure to the
     located runs that no edge explains. A period that would span a frame
     delimiter is not measured: the gap is its own edge, not a long period."""
     spec = measures(contract)
@@ -132,12 +168,13 @@ def measure(contract, samples, dt_ns):
         prev = name
         t += w
 
+    _absorb(pulses, unmatched, spec, edges, dt_ns)
     observations = []
     for name, ps in pulses.items():
-        whole = [p for p in ps if not p.get("cut_off")]
-        ps[:] = whole or ps                          # a partial run only when nothing better
-        if ps:
-            d = distribution([p["width_ns"] for p in ps])
+        # a partial run counts only when nothing better; it stays listed, flagged
+        counted = [p for p in ps if not p.get("cut_off")] or ps
+        if counted:
+            d = distribution([p["width_ns"] for p in counted])
             d.update(name=name, unit="ns", value=d["p50"], resolution_ns=round(dt_ns, 3))
             observations.append(d)
     return observations, pulses, {m: ps for m, ps in unmatched.items() if ps}

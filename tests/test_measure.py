@@ -144,6 +144,7 @@ def test_the_starting_idle_is_the_reset_only_when_there_is_no_other():
     results, ok, _, _ = judge_samples(c, pulse(80000, 0) + frame + pulse(60000, 0) + frame + [0], SR)
     reset = {r["edge"]: r for r in results}["RESET"]
     assert ok and reset["count"] == 1 and reset["actual"] == 60000
+    assert reset["hint"] == "1 more cut off by the capture's start or end, not counted"
 
 
 def test_an_optional_edge_may_be_absent():

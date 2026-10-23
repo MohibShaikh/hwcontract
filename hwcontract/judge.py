@@ -634,11 +634,12 @@ def render(results):
     ww = max([len("window")] + [len(_window(r)) for r in results]) if any(
         "window" in r for r in results) else 0
     win = (lambda s: f" {s:>{ww}}") if ww else (lambda s: "")
-    lines = [f"{'edge':<{w}}{win('window')} {'typ':>7} {'actual':>8}  {'status':<9} hint",
-             "-" * (w + 53 + (ww + 1 if ww else 0))]
-    for r in results:
-        lines.append(f"{r['edge']:<{w}}{win(_window(r))} {r['typ']:>7} "
-                     f"{str(r['actual'] if r['actual'] is not None else '-'):>8}"
+    actual = [str(r["actual"] if r["actual"] is not None else "-") for r in results]
+    wa = max([8] + [len(a) for a in actual])                 # a serial forbid shows its match
+    lines = [f"{'edge':<{w}}{win('window')} {'typ':>7} {'actual':>{wa}}  {'status':<9} hint",
+             "-" * (w + wa + 45 + (ww + 1 if ww else 0))]
+    for r, a in zip(results, actual):
+        lines.append(f"{r['edge']:<{w}}{win(_window(r))} {r['typ']:>7} {a:>{wa}}"
                      f"  {r['status']:<9} {r['hint']}")
     return "\n".join(lines)
 

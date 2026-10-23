@@ -45,7 +45,8 @@ def test_a_gap_no_edge_explains_fails_and_is_located(tmp_path):
     write_csv(tmp_path / "gap.csv", frame_with_gap(7000))
     r = cli("--check", "ws2812b", "gap.csv", "--samplerate", str(SR), cwd=tmp_path)
     assert r.returncode == 1
-    assert "1 low pulse of 7000ns that match no edge (over 2x outside every low window)" in r.stdout
+    assert ("1 low pulse of 7000ns, longer than T0L's max 1000ns, shorter than RESET's min "
+            "50000ns: no edge explains them") in r.stdout
     assert "(frame 0, after 3 highs)" in r.stdout
     r = cli("--check", "ws2812b", "gap.csv", "--samplerate", str(SR), "--json", cwd=tmp_path)
     v = json.loads(r.stdout)
@@ -163,15 +164,38 @@ def test_hints_say_how_far_past_the_limit():
     assert status == FAIL and hint.startswith("250ns short (typ 2000), 150ns past min")
 
 
-def test_out_of_window_and_unmatched_of_one_spread_get_a_note(tmp_path):
-    # stalled lows from 1.8 to 3us: the 2x line cuts them into T0L and unmatched
+def stalled(lows):
+    """WS2812 0-bits whose every 40th low is stretched, cycling through lows."""
     s = pulse(80000, 0)
     for i in range(400):
-        s += pulse(400, 1) + pulse([1800, 2400, 3000][i % 3] if i % 40 == 0 else 850, 0)
-    s += pulse(300000, 0) + [1]
-    write_csv(tmp_path / "c.csv", s)
-    r = cli("--check", "ws2812b", "c.csv", "--samplerate", "24MHz", cwd=tmp_path)
+        s += pulse(400, 1) + pulse(lows[(i // 40) % len(lows)] if i % 40 == 0 else 850, 0)
+    return s + pulse(300000, 0) + [1]
+
+
+def test_one_spread_of_stalls_is_one_row(tmp_path):
+    # stalled lows from 1.8 to 3us: the 2x line runs through them, the problem does not
+    write_csv(tmp_path / "c.csv", stalled([1800, 2400, 3000]))
+    r = cli("--check", "ws2812b", "c.csv", "--samplerate", "24MHz", "--json", cwd=tmp_path)
+    by = {row["edge"]: row for row in json.loads(r.stdout)["results"]}
+    assert r.returncode == 1 and by["T0L"]["status"] == "PASS"
+    assert by["unmatched low"]["count"] == 10
+    assert min(p["width_ns"] for p in by["unmatched low"]["locations"]) == 1792   # whole samples
+
+
+def test_an_edge_that_is_all_wrong_keeps_its_pulses_and_gets_a_note(tmp_path):
+    # every low is stretched: T0L is wrong, not a few outliers of the unmatched spread
+    (tmp_path / "part.yaml").write_text(
+        "contract: part\nheadroom_pct: 20\nedges:\n"
+        "  - {name: T0H, min: 250, typ: 400, max: 550}\n"
+        "  - {name: T0L, min: 700, typ: 850, max: 1000}\n"
+        "  - {name: RESET, min: 50000, typ: 50000, max: null}\n")
+    s = pulse(80000, 0)
+    for i in range(40):
+        s += pulse(400, 1) + pulse(1900 if i % 2 else 2400, 0)
+    write_csv(tmp_path / "c.csv", s + pulse(400, 1) + pulse(300000, 0) + [1])
+    r = cli("--check", "part.yaml", "c.csv", "--samplerate", "24MHz", cwd=tmp_path)
     assert r.returncode == 1 and "unmatched low" in r.stdout
+    assert [l.split()[4] for l in r.stdout.splitlines() if l.startswith("T0L")] == ["FAIL"]
     note = " ".join(r.stdout.split("note:")[1].split())
     assert note.startswith("the out-of-window pulses of T0L and the unmatched lows of")
     assert "are one spread of widths" in note

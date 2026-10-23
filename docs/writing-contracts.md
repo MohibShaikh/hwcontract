@@ -119,18 +119,22 @@ How every run is placed:
    `measure.py`), it is **unmatched**: the contract does not explain it, and an
    `unmatched low` (or `high`, `period`) row fails the verdict. Unmatched
    pulses are grouped by width, so 2-3us stalls and 6-9us gaps are two rows.
-   When one spread of widths straddles the 2x line (stalls of 1.8-3us against
-   a 1us max), the out-of-window rows and the unmatched row are one problem,
-   and the verdict adds a note saying so.
 3. Otherwise it is blamed on the nearest edge allowed after the previous run,
    so a stretched low counts against its own bit's low. Width alone decides
    unmatched; `after` only decides which edge is blamed.
-4. A run cut off by the start or end of the capture has a true width of at
+4. Out-of-window pulses that continue an unmatched spread (each within 1.5x
+   of the next, `CLUSTER_RATIO`) join its row. Stalls of 1.8-3.2us against a
+   1us max are one problem and one `unmatched low` row, not a few violations
+   on each bit's low plus an unmatched row cut off at 2x. An edge whose every
+   pulse is out of window keeps them: then the edge itself is wrong, it fails,
+   and a note says its pulses and the unmatched row are one spread.
+5. A run cut off by the start or end of the capture has a true width of at
    least what was seen. It counts only for an open-ended edge (`max: null`,
    such as a reset gap), only once it reaches that edge's min, and only when
    the capture holds no complete run of that edge. The idle a capture starts
    in stands in for RESET in a one-frame capture, but never passes for a good
-   gap between frames when the real gaps are short.
+   gap between frames when the real gaps are short. The row's hint says how
+   many such runs it left out.
 
 Every failing row locates its pulses: the start time in the capture, and when
 the contract has a frame delimiter (an open-ended edge longer than every

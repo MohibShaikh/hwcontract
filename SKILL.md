@@ -54,8 +54,8 @@ backslashes (`"\\d+"`). Event contracts: `docs/writing-contracts.md`.
   clean.
 - `unmatched low` / `high` / `period`: pulses no edge explains (over 2x
   outside every window of that kind), one row per width cluster. Often this
-  is the bug: a stall, a glitch, a wrong rate. A note says when unmatched
-  pulses and an edge's out-of-window pulses are one spread of widths.
+  is the bug: a stall, a glitch, a wrong rate. Out-of-window pulses that
+  continue the same spread are in that row, so one problem is one row.
 - `first at 1.412ms (frame 0, after 1019 highs)` locates the first bad pulse.
   For an LED strip the highs count is the bit index: LED 1019 // 24 = 42, bit
   1019 % 24 = 11 (32 bits per LED for RGBW). `--json` lists up to 20 per row.

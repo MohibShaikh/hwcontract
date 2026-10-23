@@ -46,11 +46,11 @@ def list_contracts():
         contract = load_contract(str(path))
         kind = contract.get("kind", "timing")
         if kind == "serial":
-            adapter = "log file: --check; live: check_serial"
+            adapter = "log file: --check; live: MCP check_serial"
         elif kind == "events":
             adapter = "trace JSON: --check; raw CS/SCK/MOSI edges, see writing-contracts guide"
         elif _measurable(contract):
-            adapter = "0/1 CSV: --check --samplerate HZ; live: check_capture (sigrok)"
+            adapter = "0/1 CSV: --check --samplerate HZ; live: MCP check_capture (sigrok)"
         else:
             adapter = "observations JSON: --check; edges need measure: to judge a CSV"
         entries.append({"name": name, "contract": contract["contract"],

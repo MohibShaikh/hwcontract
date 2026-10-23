@@ -51,20 +51,26 @@ The capture is judged against two contracts. Same signal, two verdicts
 (output excerpt; each judgment also prints its evidence hashes):
 
 ```
-measured on the real WS2812B signal (300000 samples @24MHz):
-  T0H 333 ns   T1H 833 ns   T1L 417 ns   T0L 917 ns   RESET 992250 ns
+real WS2812B signal: 300000 samples @24MHz, measured the way each contract's edges say (same as hwcontract --check)
 
 === generic WS2812 contract -> FAIL ===
-  T0H     350   333  PASS
-  T0L     800   917  MARGINAL  within one sample (41.7ns) of max; 1842 of 4275
-                               pulses within one sample of the window
-  T1H     700   833  MARGINAL  within one sample (41.7ns) of max
-  T1L     600   417  MARGINAL  33ns past min, within one sample (41.7ns);
-                               capture at a higher samplerate to resolve
-  RESET 50000 992250 PASS
+edge     window     typ   actual  status    hint
+T0H     200-500     350      333  PASS
+T0L     650-950     800      917  MARGINAL  within one sample (41.7ns) of max; ...
+                                            1842 of 4275 pulses within one sample of the window
+T1H     550-850     700      833  MARGINAL  within one sample (41.7ns) of max; ...
+T1L     450-750     600      417  MARGINAL  33ns past min, within one sample (41.7ns); ...
+RESET   >=50000   50000   992250  PASS
 
 === matching WS2812B contract -> PASS ===
   (all five edges PASS)
+```
+
+To judge the same capture yourself, the way you would judge your own:
+
+```bash
+python3 -m hwcontract.demo ws2812b --export capture.csv
+hwcontract --check ws2812b capture.csv --samplerate 24MHz
 ```
 
 Same hardware, two contracts: the generic one fails, the chip-specific one
@@ -114,7 +120,7 @@ CLI or MCP verdict for a production check.
   needs an adapter that emits observations JSON.
 - **Every pulse is accounted for.** Each one lands on the edge whose window
   holds it, or is blamed on the nearest window within 2x; a pulse the contract
-  cannot explain fails as `unmatched`. Failing rows say where: the time, and
+  cannot explain fails as `unmatched`, one row per spread of widths. Failing rows say where: the time, and
   with a frame delimiter such as RESET, the frame and how many highs came
   before (for an LED strip, the bit index). The tool reports facts; the model
   reading them brings the protocol knowledge.

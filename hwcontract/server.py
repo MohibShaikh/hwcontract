@@ -642,14 +642,16 @@ and pass its path to --check. Each edge says what it measures on the line:
                                  e.g. a bit period TH+TL)
   after: EDGE      only the run right after EDGE (T1L is after T1H)
   required: false  explains pulses when present, absence is not MISSING
-  T0H/T1H/T0L/T1L/RESET need no measure. Examples: --list-contracts --json.
+  T0H/T1H/T0L/T1L/RESET need no measure. To start from a bundled contract,
+  copy the YAML at its "path" in --list-contracts --json.
 
 results: each run goes to the edge whose window holds it, else is blamed on the
 nearest edge; more than 2x outside every window of its kind it is "unmatched"
-and fails. actual is the median (p50) of the pulses an edge got; the hint
-counts the ones out of window. A run cut off by the capture's start or end
-counts only for an open-ended edge, once it reaches that edge's min, and only
-when the capture holds no complete run of that edge.
+and fails, together with the out-of-window pulses that continue its spread
+(one row per problem). actual is the median (p50) of the pulses an edge got;
+the hint counts the ones out of window. A run cut off by the capture's start
+or end counts only for an open-ended edge, once it reaches that edge's min,
+and only when the capture holds no complete run of that edge.
 
 failing rows locate their pulses: "at 1.4ms (frame 2, after 1019 highs)" is the
 time in the capture, the frame (counted at each reset-like gap: an open-ended

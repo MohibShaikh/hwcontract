@@ -16,12 +16,11 @@ from hwcontract.jsontrace import from_traceevents
 from hwcontract.judge import (FAIL, MARGINAL, load_contract, out_of_window, render,
                               render_verdict, run, run_serial, sha256_of,
                               validate_judge_contract, verdict)
-from hwcontract.measure import TOLERANCE, measure, measures
+from hwcontract.measure import CLUSTER_RATIO, TOLERANCE, measure, measures
 from hwcontract.sigrok_adapter import positive_finite, read_csv, sample_period
 from hwcontract.temporal import judge_events, normalize_events, render_events
 
 MAX_LOCATIONS = 20                  # located pulses kept per row
-CLUSTER_RATIO = 1.5                 # widths further apart than this are separate problems
 _HZ = re.compile(r"\s*([0-9.]+(?:[eE][+-]?[0-9]+)?)\s*([kKmMgG]?)(?:[hH][zZ])?\s*")
 _SCALE = {"": 1, "k": 1e3, "m": 1e6, "g": 1e9}
 
@@ -78,6 +77,21 @@ def _clusters(pulses, ratio=CLUSTER_RATIO):
     return groups
 
 
+def _beyond(lo, hi, windows, kind):
+    """Where unmatched widths fall against the nearest windows, in plain words:
+    'longer than T0L's max 1000ns, shorter than RESET's min 50000ns'."""
+    below = [e for e in windows if e.get("max") is not None and e["max"] < lo]
+    above = [e for e in windows if e["min"] > hi]
+    parts = []
+    if below:
+        e = max(below, key=lambda e: e["max"])
+        parts.append(f"longer than {e['name']}'s max {e['max']}ns")
+    if above:
+        e = min(above, key=lambda e: e["min"])
+        parts.append(f"shorter than {e['name']}'s min {e['min']}ns")
+    return (", ".join(parts) or f"outside every {kind} window") + ": no edge explains them"
+
+
 def judge_samples(c, samples, samplerate):
     """(results, ok, params, notes) for 0/1 samples, measured the way the
     contract says. Rows that fail on pulses carry those pulses' locations; runs
@@ -90,6 +104,11 @@ def judge_samples(c, samples, samplerate):
     edges, spec = {e["name"]: e for e in c["edges"]}, measures(c)
     blamed = {}                                     # measure -> [(edge, out-of-window widths)]
     for row in results:
+        ps = pulses.get(row["edge"], [])
+        cut = sum(1 for p in ps if p.get("cut_off"))
+        if cut and cut < len(ps):        # the idle a capture starts or ends in
+            row["hint"] = "; ".join(filter(None, [row["hint"], (
+                f"{cut} more cut off by the capture's start or end, not counted")]))
         if row["status"] in (FAIL, MARGINAL) and row.get("violations"):
             bad = [p for p in pulses[row["edge"]]
                    if out_of_window(edges[row["edge"]], p["width_ns"], dt_ns)]
@@ -106,9 +125,9 @@ def judge_samples(c, samples, samplerate):
             group.sort(key=lambda p: p["t_ns"])
             results.append({"edge": f"unmatched {kind}", "typ": "-", "actual": None,
                             "status": FAIL, "count": n, "locations": group[:MAX_LOCATIONS],
-                            "hint": (f"{n} {kind} pulse{'s' if n > 1 else ''} of {span} that "
-                                     f"match no edge (over {TOLERANCE:g}x outside every {kind} "
-                                     f"window); first {_where(group[0])}")})
+                            "hint": (f"{n} {kind} pulse{'s' if n > 1 else ''} of {span}, "
+                                     f"{_beyond(lo, hi, [edges[e] for e, (m, _) in spec.items() if m == kind], kind)}"
+                                     f"; first {_where(group[0])}")})
             ok = False
             near = [e for e, ws in blamed.get(kind, ())
                     if any(w <= lo <= CLUSTER_RATIO * w or hi <= w <= CLUSTER_RATIO * hi
@@ -121,8 +140,10 @@ def judge_samples(c, samples, samplerate):
     empty = [row["edge"] for row in results if row["status"] == "MISSING"]
     if empty:
         notes.append(f"no pulses landed in {', '.join(empty)}. Check that {_fmt_hz(samplerate)} "
-                     "is the rate the capture was taken at and that it is a "
-                     f"{c['contract']} signal: every width scales with the samplerate.")
+                     "is the rate the capture was taken at (every width scales with it), "
+                     f"that this is a {c['contract']} signal, and whether the pulses meant for "
+                     f"{'it' if len(empty) == 1 else 'them'} are far enough off to sit nearer "
+                     "another edge's window and landed there.")
     return results, ok, {"samplerate_hz": samplerate}, notes
 
 
