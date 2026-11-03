@@ -101,3 +101,13 @@ def test_documented_raw_spi_recipe(tmp_path, monkeypatch, broken, code):
     assert verdict["verdict"] == ("FAIL" if broken else "PASS")
     assert verdict["capture_sha256"] == hashlib.sha256((tmp_path / "spi.csv").read_bytes()).hexdigest()
     assert verdict["samplerate_hz"] == 100_000_000
+
+
+def test_ws2812b_export_writes_a_csv_that_check_reads(tmp_path, monkeypatch):
+    samples = [0] * 2000 + ([1] * 10 + [0] * 20) * 24 + [0] * 2000 + [1]
+    monkeypatch.setattr(demo_ws2812b, "get_capture", lambda *a: "capture.sr")
+    monkeypatch.setattr(demo_ws2812b, "load_data_in", lambda path: samples)
+    out = tmp_path / "capture.csv"
+    assert demo_ws2812b.main(export=out) == 0
+    from hwcontract.sigrok_adapter import read_csv
+    assert read_csv(str(out)) == samples

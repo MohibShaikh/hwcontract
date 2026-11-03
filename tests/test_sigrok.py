@@ -116,7 +116,8 @@ def test_capture_validates_output_and_parameters(monkeypatch):
 @pytest.mark.parametrize("args,text,diagnostic", [
     (["--samplerate", "0"], "0\n1\n", "samplerate must be a positive finite"),
     (["--samplerate", "24000000"], "Time,D0\n0,1\n", "line 1: expected one 0 or 1"),
-    ([], "", "no samples"),
+    (["--samplerate", "24000000"], "", "no samples"),
+    ([], "0\n1\n", "--csv needs --samplerate"),     # no silent 24MHz guess for a file
 ])
 def test_adapter_cli_input_errors_have_no_traceback(tmp_path, args, text, diagnostic):
     import subprocess

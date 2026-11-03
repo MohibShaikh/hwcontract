@@ -8,10 +8,10 @@ inputs:
   timing:
     description: >-
       Timing checks as contract=capture-glob pairs, newline or comma separated.
-      Captures are CSVs of 0/1 samples, one per line (sigrok_adapter --csv format),
-      bucketed with the WS2812-family pulse thresholds. Contract is a path or a
-      bundled name (ws2812b, sk6812, ...). DShot and other timing protocols need
-      their own thresholds: use the pytest plugin's capture_csv instead.
+      Captures are CSVs of 0/1 samples, one per line, measured the way the
+      contract's edges say (see docs/writing-contracts.md), or observations
+      JSON for any timing contract. Contract is a path or a bundled name
+      (ws2812b, sk6812, dshot, pwm-fan, ...).
     required: false
   serial:
     description: >-
@@ -44,7 +44,9 @@ runs:
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - run: pip install --quiet "hwcontract==0.6.1"
+    # the library from this same checkout, so check.py never runs against a
+    # different hwcontract than the one it was written for
+    - run: pip install --quiet "$GITHUB_ACTION_PATH"
       shell: bash
     - id: check
       env:

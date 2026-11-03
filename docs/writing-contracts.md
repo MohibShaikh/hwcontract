@@ -12,7 +12,7 @@ Three kinds of contracts exist, judged by three different tools:
 
 | kind            | what it checks             | tool                                          | examples                 |
 |-----------------|----------------------------|-----------------------------------------------|--------------------------|
-| timing, no kind | pulse widths in ns         | `judge_contract`, `check_ws2812`, `check_dshot` | ws2812b, dshot, servo, hc-sr04 |
+| timing, no kind | pulse widths in ns         | `judge_contract`, `judge_file`, `check_capture` | ws2812b, dshot, pwm-fan, servo |
 | serial          | regexes against a log      | `judge_serial`, `check_serial`                | boot, esp32, nrf54l15    |
 | events          | relationships between decoded events | `judge_events`, the `temporal` CLI  | spi-frame                |
 
@@ -21,9 +21,9 @@ you call picks the judge: `judge_contract` runs the edge table,
 `judge_serial` runs expect/forbid, `judge_events` runs temporal assertions.
 Use explicit `kind: serial` or `kind: events` for those schemas; timing is the
 default. The judges reject the wrong contract kind instead of returning an
-empty or misleading verdict. `check_ws2812` and `check_dshot` only capture
-WS2812-family and DShot600 pulse buckets, respectively; they are not generic
-capture tools for every timing template in the table.
+empty or misleading verdict. A 0/1 capture (`judge_file`, `check_capture`,
+`hwcontract --check`) can be judged against any timing contract whose edges
+say what they measure; see [Measuring a capture](#measuring-a-capture).
 
 ## Timing contract anatomy
 
@@ -44,7 +44,8 @@ Three fields per edge:
 
 - `min` / `max` bound the window the pulse must land in.
 - `typ` is what a healthy driver emits. The judge uses it for the FAIL hint:
-  "183ns short (typ 600)" tells the agent which way to move the delay.
+  "183ns short (typ 600), 33ns past min" tells the agent which way to move
+  the delay and how far it is from passing.
 - `max: null` means the spec has no upper bound. A WS2812B RESET is "at least
   50us": the strip must stay latched for minutes, so only the minimum is
   checked. The judge skips the max rail when it is null, and marginal checks
@@ -80,21 +81,72 @@ the closest example: LEDs use 20, DShot uses 15 because ESCs are less
 forgiving. Don't crank the number down to silence marginals; fix the driver
 instead.
 
-## Edge naming
+## Measuring a capture
 
-Names must match what the adapter emits. The shared timing adapter in
-`sigrok_adapter.py` buckets pulse widths into these names:
+A 0/1 capture is measured by the contract, not by protocol code, so a part
+nobody has added to hwcontract works from its datasheet numbers alone. Each
+timing edge says what it times:
 
-- `T0H`, `T1H`, `T1L`, `T0L`, `RESET` for WS2812-family and DShot, with the
-  per-protocol split thresholds passed in.
+- `measure: high`: the width of a high run.
+- `measure: low`: the width of a low run.
+- `measure: period`: rising edge to rising edge, within a frame. A period
+  that would span a frame delimiter (see below) is not measured: the gap is
+  its delimiter's to judge.
+- `after: EDGE` (high/low only): the edge applies only to the run right after
+  `EDGE`. That is how a bit's low belongs to its bit: `T1L` is `after: T1H`,
+  so a stretched low after a 1-bit counts against `T1L` however long it is.
+- `required: false`: the edge explains pulses when they appear but its absence
+  is not `MISSING`. DShot's `FRAME_GAP` and an IR remote's repeat code are
+  this kind of edge.
 
-Other protocols need a custom observation adapter that picks matching names. `servo.contract.yaml`
-uses `PULSE_MIN`, `PULSE_NEUTRAL`, `PULSE_MAX`, `FRAME`; `hc-sr04.contract.yaml`
-uses `TRIG`, `ECHO`, `CYCLE`. Neither adapter is included. The same applies to
-I2C, NEC IR, DS18B20/DHT, stepper and PWM-fan timing templates. DShot150/300/1200
-can use the shared bucketing API with rate-specific split/reset thresholds;
-`check_dshot` itself is fixed to DShot600. Add YAML alone only when an existing
-adapter already emits all required observations.
+`T0H`, `T1H`, `T0L`, `T1L` and `RESET` need no annotation: `T0H`/`T1H` are
+highs, `T0L`/`T1L` the lows after them, `RESET` a low. A new protocol:
+
+```yaml
+contract: my-sensor                 # 3us/9us highs for 0/1, 4us low, >=100us idle
+headroom_pct: 10
+edges:
+  - {name: ZERO,  measure: high, min: 2500,   typ: 3000,   max: 3500}
+  - {name: ONE,   measure: high, min: 8000,   typ: 9000,   max: 10000}
+  - {name: SPACE, measure: low,  min: 3500,   typ: 4000,   max: 4500}
+  - {name: GAP,   measure: low,  min: 100000, typ: 100000, max: null}
+```
+
+How every run is placed:
+
+1. It goes to the edge whose window holds it; if several do, the nearest typ.
+2. If it is more than 2x outside every window of its measure (`TOLERANCE` in
+   `measure.py`), it is **unmatched**: the contract does not explain it, and an
+   `unmatched low` (or `high`, `period`) row fails the verdict. Unmatched
+   pulses are grouped by width, so 2-3us stalls and 6-9us gaps are two rows.
+3. Otherwise it is blamed on the nearest edge allowed after the previous run,
+   so a stretched low counts against its own bit's low. Width alone decides
+   unmatched; `after` only decides which edge is blamed.
+4. Out-of-window pulses that continue an unmatched spread (each within 1.5x
+   of the next, `CLUSTER_RATIO`) join its row. Stalls of 1.8-3.2us against a
+   1us max are one problem and one `unmatched low` row, not a few violations
+   on each bit's low plus an unmatched row cut off at 2x. An edge whose every
+   pulse is out of window keeps them: then the edge itself is wrong, it fails,
+   and a note says its pulses and the unmatched row are one spread.
+5. A run cut off by the start or end of the capture has a true width of at
+   least what was seen. It counts only for an open-ended edge (`max: null`,
+   such as a reset gap), only once it reaches that edge's min, and only when
+   the capture holds no complete run of that edge. The idle a capture starts
+   in stands in for RESET in a one-frame capture, but never passes for a good
+   gap between frames when the real gaps are short. The row's hint says how
+   many such runs it left out.
+
+Every failing row locates its pulses: the start time in the capture, and when
+the contract has a frame delimiter (an open-ended edge longer than every
+bounded edge of its measure, like `RESET`) the frame number and how many highs
+of that frame came before. For an LED strip that count is the bit index, so
+`after 1019 highs` is LED 42, bit 11. `--json` keeps up to 20 locations per row.
+
+Edges that cannot be read from one line (I2C setup/hold, STEP/DIR timing,
+servo positions that are different commands) have no `measure:`; judge them
+from observations JSON produced by your own adapter. `servo.contract.yaml`
+uses `PULSE_MIN`, `PULSE_NEUTRAL`, `PULSE_MAX`, `FRAME`; `hc-sr04` uses `TRIG`,
+`ECHO`, `CYCLE` on two lines.
 
 A misspelled edge never matches an observation and reports `MISSING: no
 observation for this edge`, which fails the judgment. That is the behavior you
@@ -171,7 +223,8 @@ pulse against the window, not just the median:
 
 - All pulses in window, median comfortable: `PASS`.
 - Median in spec but a few pulses outside: `MARGINAL`, with the count in the
-  hint ("3 of 1200 pulses out of window (0.25%)").
+  hint, the range of the bad ones and how far past the limit the worst is
+  ("3 of 1200 pulses out of window (0.25%): 1012-1090ns, up to 1.09x max").
 - More than 1% of pulses outside the window: `FAIL`, even when the median sits
   dead on typ. A driver that glitches one bit in a hundred is not a driver
   you ship.
@@ -380,9 +433,9 @@ verification happens inside the window. If the user takes longer than the
 capture window to present a finger, the contract correctly fails: lengthen
 `seconds` rather than deleting the line.
 
-Timing captures have the same shape of problem. `sigrok_adapter.py` drops the
-boundary runs, truncated by capture start and stop, and scans RESET across all
-runs so a latch gap at the capture edge is not lost. One WS2812 LED takes about
+Timing captures have the same shape of problem. Runs truncated by capture
+start and stop are only judged by open-ended edges, so a latch gap at the
+capture edge still counts as RESET. One WS2812 LED takes about
 30us of wire time (24 bits at 1.25us each) plus a 50us reset at the end of the
 frame. A 200,000-sample capture at 24MHz is 8.3ms: comfortably one frame for a
 long strip and its reset. Capture enough samples for one full frame plus the
@@ -431,12 +484,14 @@ python3 -m hwcontract.demo ws2812b
 2. Or capture your own and judge it from the command line:
 
 ```bash
-python3 -m hwcontract.sigrok_adapter --driver fx2lafw --channel D0 \
-    --samplerate 24000000 --samples 200000 > observations.json
-python3 -m hwcontract.judge my.contract.yaml observations.json
+sigrok-cli --driver fx2lafw --channels D0 --config samplerate=24M \
+    --samples 200000 -O csv > capture.csv
+hwcontract --check my.contract.yaml capture.csv --samplerate 24MHz
 ```
 
-   Offline replay from a saved CSV works the same way with `--csv`.
+   The capture is measured the way your edges say. Observations JSON from
+   your own adapter works the same way: `hwcontract --check my.contract.yaml
+   observations.json`.
 
 3. Serial contracts, judged the same way the demo tape does:
 

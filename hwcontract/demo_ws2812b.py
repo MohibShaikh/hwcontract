@@ -7,9 +7,9 @@ import tempfile
 import urllib.request
 import zipfile
 
+from hwcontract.check import judge_samples
 from hwcontract.contracts import EXAMPLES
-from hwcontract.judge import evidence, load_contract, render, run, sha256_of
-from hwcontract.sigrok_adapter import observe
+from hwcontract.judge import evidence, load_contract, render
 
 REVISION = "f0d084a821370a4855a1305fc66439b6d3c54fce"
 FILENAME = "ws2812b_neopixel24_24mhz.sr"
@@ -72,26 +72,28 @@ def load_data_in(sr_path):
     return list(bits[offset:offset + WINDOW])
 
 
-def main(cache_dir=None, capture_path=None, offline=False):
+def main(cache_dir=None, capture_path=None, offline=False, export=None):
     cap = get_capture(cache_dir, capture_path, offline)
     samples = load_data_in(cap)
-    obs = observe(samples, 1e9 / SAMPLERATE)
-    print(f"\nmeasured on the real WS2812B signal ({len(samples)} samples @24MHz):")
-    for item in obs:
-        print(f"  {item['name']:<6} {item['value']} ns")
+    if export is not None:              # the same 0/1 CSV a logic analyzer exports
+        Path(export).write_text("".join(f"{b}\n" for b in samples))
+        print(f"wrote {len(samples)} samples @24MHz to {export}\n"
+              f"judge it: hwcontract --check ws2812b {export} --samplerate 24MHz")
+        return 0
+    print(f"\nreal WS2812B signal: {len(samples)} samples @24MHz, measured the way "
+          "each contract's edges say (same as hwcontract --check)")
     outcomes = []
     for label, filename in [("generic WS2812 contract", "ws2812.contract.yaml"),
                             ("matching WS2812B contract", "ws2812b.contract.yaml")]:
         contract_path = str(EXAMPLES / filename)
-        results, ok = run(load_contract(contract_path), obs)
+        results, ok, _, _ = judge_samples(load_contract(contract_path), samples, SAMPLERATE)
         outcomes.append(ok)
         print(f"\n=== {label} -> {'PASS' if ok else 'FAIL'} ===")
         print(render(results))
         print("evidence: " + json.dumps(evidence(
             contract_path, capture_sha256=SHA256, capture_url=URL,
             samplerate_hz=SAMPLERATE, samples=len(samples), channel="DATA_IN (bit 0)",
-            window="50 samples before first transition, up to 300000 samples",
-            observations_sha256=sha256_of(obs)), sort_keys=True))
+            window="50 samples before first transition, up to 300000 samples"), sort_keys=True))
     if outcomes != [False, True]:
         print("Unexpected demo verdicts: expected generic FAIL and matching PASS.")
         return 1

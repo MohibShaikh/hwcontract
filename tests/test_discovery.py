@@ -38,7 +38,7 @@ def test_cli_json_matches_mcp_catalog(tmp_path):
     assert len(cli) == 28
     by_name = {e["name"]: e for e in cli}
     assert by_name["dshot"]["contract"] == "dshot600"
-    assert by_name["servo"]["capture_path"] == "custom observation adapter required"
+    assert by_name["servo"]["capture_path"].startswith("observations JSON")
     assert {e["kind"] for e in cli} == {"timing", "serial", "events"}
     assert all(Path(e["path"]).is_file() for e in cli)
 

@@ -1,8 +1,8 @@
 """The hwcontract fixture: a failing hardware check is a failing test.
 
     def test_strip(hwcontract):
-        obs = hwcontract.capture_csv("strip.csv", samplerate=24_000_000)
-        hwcontract.timing("ws2812b", obs)          # bundled contract by name
+        hwcontract.check("ws2812b", "strip.csv", samplerate=24_000_000)   # bundled name
+        hwcontract.timing("contracts/esc.contract.yaml", observations)  # widths you measured
         hwcontract.serial("boot", open("boot.log").read())
         hwcontract.events("spi-frame", trace="captures/spi.json")
 
@@ -17,12 +17,11 @@ import os
 
 import pytest
 
-import hwcontract
+from hwcontract.check import check_file, report
+from hwcontract.contracts import bundled_contract
 from hwcontract.judge import (load_contract, run, run_serial, render,
                               render_verdict, sha256_of, verdict)
 from hwcontract.temporal import judge_events, normalize_events, render_events
-
-BUNDLED = os.path.join(os.path.dirname(hwcontract.__file__), "examples")
 
 
 def pytest_addoption(parser):
@@ -47,9 +46,8 @@ class HwContract:
             return name
         if self._root and os.path.isfile(os.path.join(self._root, name)):
             return os.path.join(self._root, name)
-        base = name if name.endswith(".yaml") else f"{name}.contract.yaml"
-        bundled = os.path.join(BUNDLED, base)
-        if os.path.isfile(bundled):
+        bundled = bundled_contract(name)
+        if bundled:
             return bundled
         raise ContractNotFound(
             f"hwcontract: no contract file for {name!r} "
@@ -58,15 +56,26 @@ class HwContract:
     def _judge(self, path, results, ok, input_kind, input_sha, table):
         v = verdict(path, results, ok, input_kind=input_kind,
                     input_sha256=input_sha)
+        return self._settle(v, render_verdict(v, table))
+
+    def _settle(self, v, message):
         self.evidence = {k: v[k] for k in ("verdict", "contract_sha256",
                                            "input_sha256", "input_kind",
                                            "hwcontract_version", "timestamp_utc")}
         self._record("hwcontract.contract_sha256", v["contract_sha256"])
         self._record("hwcontract.input_sha256", v["input_sha256"])
         self._record("hwcontract.verdict", v["verdict"])
-        if not ok:
-            raise AssertionError(render_verdict(v, table))
-        return results
+        if not v["ok"]:
+            raise AssertionError(message)
+        return v["results"]
+
+    def check(self, contract, path, samplerate=None):
+        """Judge a saved file the way `hwcontract --check` does, read by the
+        contract's kind: a 0/1 capture CSV (measured the way the contract's
+        edges say) or observations JSON, a log, a trace."""
+        self.evidence = None
+        v, table, notes = check_file(self.resolve(contract), path, samplerate)
+        return self._settle(v, report(v, table, notes))
 
     def timing(self, contract, observations):
         """Judge pulse-width observations against a timing contract."""
